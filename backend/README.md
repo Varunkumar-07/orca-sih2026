@@ -1,4 +1,4 @@
-# ORCA Backend — Smart India Hackathon 2026 (ISRO, PS26176)
+# ORCA Backend — Smart India Hackathon 2026 (ISRO, SIH26176)
 
 Multi-agent marine intelligence platform: conversational query → planning/orchestrator → marine/weather/risk (Groq `openai/gpt-oss-20b`) → ocean analytics/geospatial (deterministic `pandas`/`numpy`/`shapely`) → reporting/visualization → `FinalResponse` with live reasoning trace + `MapPayload`. Backs 9 frontend pages: Home, Chat + Map, Zones Explorer, Weather, Route Planner, Alerts, Analytics, Download, History.
 
@@ -13,16 +13,17 @@ Every file under `backend/` imports with the absolute prefix `backend.xxx` (e.g.
 ```bash
 # 1. Set up the venv — this part happens inside backend/
 cd backend
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt   # fastapi, uvicorn, pydantic, python-dotenv, groq, httpx,
-                                   # copernicusmarine, numpy, pandas, shapely, pytest, reportlab,
+                                   # copernicusmarine, xarray, numpy, pandas, shapely, pytest, reportlab,
                                    # python-docx, scikit-learn, joblib, sqlalchemy, asyncpg, alembic
 
 # 2. Go back to the project root before starting the server — required, see above
 cd ..
 # no .env needed for demo — /zones, /weather, /route, /alerts, /analytics/historical, /export
-# and /query/demo all work with zero configuration. History logging also degrades to a no-op
+# and /query/demo all work with zero configuration (without Copernicus credentials, /zones
+# returns restricted areas only — no PFZ zones; see "PFZ zone detection" below). History logging also degrades to a no-op
 # without DATABASE_URL (see Persistence Layer below) — it just won't record anything.
 uvicorn backend.main:app --reload --port 8000
 ```
@@ -33,22 +34,25 @@ Frontend (separate terminal):
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev   # http://localhost:5173, proxies /api → localhost:8000
 npm run build # production check — must pass for demo
 ```
 
 ## Environment
 
-Copy `.env.example` to `.env` and fill in whichever of these you want live (every one of them degrades gracefully when unset — see the comments in `.env.example` for exactly what each does and doesn't affect):
+Copy `.env.example` to `.env` and fill in whichever of these you want live (every one of them degrades gracefully when unset — see the comments in `.env.example` for exactly what each does and doesn't affect). Delete the lines you don't have real values for: the Copernicus placeholders aren't recognized as placeholders and would be sent as a real login attempt.
 
 | Variable | Used by | If unset |
 |---|---|---|
 | `GROQ_API_KEY` | 4 reasoning agents (Planning, Marine, Weather, Risk) | `/query/full` falls back to fixture demo; `/query/demo` is unaffected either way |
 | `PROTECTED_PLANET_API_KEY` | one-time `backend/scripts/fetch_mpa_boundaries.py` refresh | geospatial.py reads its local GeoJSON cache instead, or hardcoded fallback boundaries |
 | `BHASHINI_USER_ID` / `BHASHINI_ULCA_API_KEY` | language_agent.py translation | language is still detected locally; pipeline runs in English end-to-end |
-| `COPERNICUSMARINE_USERNAME` / `COPERNICUSMARINE_PASSWORD` | marine_data_agent.py live chlorophyll lookup, and the shared live PFZ front-detection cache (`pfz_service.py`) read by **chat, Zones Explorer, `/route`, `/alerts`, `/weather/forecast`, and `/export`** | chlorophyll stays a mock value; PFZ zones (all of the above) fall back to the heuristic generator, tagged `PFZ-MOCK-*` |
+| `COPERNICUSMARINE_USERNAME` / `COPERNICUSMARINE_PASSWORD` | marine_data_agent.py live chlorophyll lookup, and the shared live PFZ front-detection cache (`pfz_service.py`) read by **chat, Zones Explorer, `/route`, `/alerts`, `/weather/forecast`, and `/export`** | chlorophyll is `None` (chat's marine result degrades to `partial`); no PFZ zones anywhere — `/zones` returns restricted areas only, and chat's marine agent returns `status="error"`. No mock/sample fallback |
 | `DATABASE_URL` | history persistence layer (`backend/history/`) | history logging is a silent no-op; the other 8 pages are unaffected |
+| `ORCA_API_KEY` | shared-secret auth (`auth.py`) — every request except `GET /health` must send a matching `X-API-Key` | every route stays open |
+| `RATE_LIMIT_ENABLED` / `RATE_LIMIT_PER_MINUTE` | per-client-IP rate limiting (`rate_limit.py`) | enabled by default with a generous limit |
+| `MAX_REQUEST_BODY_BYTES` | request body size cap (`main.py`) | 2 MiB |
 
 `POST /query/demo` always uses fixtures (no key needed). `POST /query/full` uses live planning when `GROQ_API_KEY` is set, otherwise falls back to fixture demo.
 
@@ -59,7 +63,7 @@ Copy `.env.example` to `.env` and fill in whichever of these you want live (ever
 | `POST` | `/query` | Raw `EvidenceBundle` (planning → marine → weather → risk) |
 | `POST` | `/query/full` | Full pipeline `FinalResponse` (deterministic + reporting + visualization) |
 | `POST` | `/query/demo` | **Demo endpoint** — fixture-based `FinalResponse`, no LLM call |
-| `GET` | `/zones` | Zones Explorer — real satellite-front-detected PFZ catalog (mock fallback per-anchor if live data is unavailable) + real restricted-area boundaries; the same shared cache chat, `/route`, `/alerts`, `/weather/forecast`, and `/export` all read |
+| `GET` | `/zones` | Zones Explorer — real satellite-front-detected PFZ catalog (an anchor with no live data contributes no zones — no mock fallback) + real restricted-area boundaries; the same shared cache chat, `/route`, `/alerts`, `/weather/forecast`, and `/export` all read |
 | `GET` | `/weather` | Live current weather/marine snapshot for a lat/lon |
 | `GET` | `/weather/forecast` | 7-day ML-predicted wave height/wind speed for a zone |
 | `POST` | `/route` | A* route between a start point and a destination/zone |
@@ -105,10 +109,10 @@ curl -i -X POST http://127.0.0.1:8000/query \
 Every request to the 7 page-facing data endpoints (`/query*` → `chat`, `/zones`, `/weather`, `/weather/forecast` → `weather`, `/route`, `/alerts`, `/analytics/historical` → `analytics`, `/export` → `download`) is logged into a Postgres `history` table by `HistoryLoggingMiddleware` — one ASGI middleware, no per-endpoint code, no changes to the 9 core agents.
 
 ```bash
-# One-time setup (after activating backend/.venv and installing requirements.txt):
+# One-time setup, from inside backend/ (after activating .venv and installing requirements.txt):
 createdb orca_dev
 cp .env.example .env   # then set DATABASE_URL=postgresql+asyncpg://<you>@localhost:5432/orca_dev
-cd backend && alembic upgrade head
+alembic upgrade head
 ```
 
 - Schema / migration: `backend/history/models.py` + `backend/alembic/versions/`. Additive and reversible (`alembic downgrade -1` cleanly drops the table).
@@ -126,13 +130,13 @@ Chat and `GET /zones` both serve Potential Fishing Zones computed from real sate
 3. Score every cell by `(SST front strength) × (chlorophyll front strength) × (SST favorability) × (chlorophyll favorability)`, reusing `analytics.py`'s existing optimal-range thresholds — a cell only ranks highly if a real front *and* biologically favorable absolute conditions co-occur there.
 4. Pick up to 3 distinct zones per anchor via greedy non-max suppression (≥15km apart, so one strong front doesn't produce 3 near-duplicate picks).
 
-**Per-anchor resilience:** concurrency is capped at 4 simultaneous anchors (`_MAX_CONCURRENT_PFZ_ANCHORS`) — Copernicus's service was measured to fail *every* request once concurrency reached 6 anchors (12 connections) at once. If live data still isn't available for a specific anchor (credentials unset, a fetch failure, or Copernicus under heavier load than usual), that anchor alone falls back to the old heuristic generator — its zone ids keep the `PFZ-MOCK-*` prefix specifically so the response is never a silent, undetectable mix of real and fallback data. Cached for 3 hours (`_ZONES_CACHE_TTL_SECONDS`, in `pfz_service.py` — see `get_cached_zones()`) since the satellite data itself only refreshes about once a day, and pre-warmed in the background at app startup (`main.py`'s lifespan, `asyncio.create_task`, not awaited) so the first real request — chat or `/zones` — never pays the cold-cache cost. If pre-warm itself fails (no credentials, a network issue), that's logged only; every endpoint's own per-request `PFZ-MOCK-*` fallback still applies regardless. Single-flight: an `asyncio.Lock` (`_zones_cache_lock`) ensures that if the TTL does expire while several requests land at once, only the first actually recomputes — everyone else waiting on the lock gets that same fresh result rather than each independently re-triggering the full 11-anchor Copernicus fetch.
+**Per-anchor resilience:** concurrency is capped at 4 simultaneous anchors (`_MAX_CONCURRENT_PFZ_ANCHORS`) — Copernicus's service was measured to fail *every* request once concurrency reached 6 anchors (12 connections) at once. If live data still isn't available for a specific anchor (credentials unset, a fetch failure, or Copernicus under heavier load than usual), that anchor contributes **zero zones** — there is no mock/sample fallback, so missing data shows up as genuinely missing rather than fabricated. With no Copernicus credentials at all, every anchor is empty and the catalog holds restricted areas only. Cached for 3 hours (`_ZONES_CACHE_TTL_SECONDS`, in `pfz_service.py` — see `get_cached_zones()`) since the satellite data itself only refreshes about once a day, and pre-warmed in the background at app startup (`main.py`'s lifespan, `asyncio.create_task`, not awaited) so the first real request — chat or `/zones` — never pays the cold-cache cost. If more than 25% of anchors come back empty, the result is cached for only 5 minutes instead (`_ZONES_CACHE_DEGRADED_TTL_SECONDS`), so a transient outage recovers quickly. If pre-warm itself fails (no credentials, a network issue), that's logged only; the next request recomputes the cache itself. Single-flight: an `asyncio.Lock` (`_zones_cache_lock`) ensures that if the TTL does expire while several requests land at once, only the first actually recomputes — everyone else waiting on the lock gets that same fresh result rather than each independently re-triggering the full 11-anchor Copernicus fetch.
 
-**Chat's own lookup — nearest-anchor, not a fresh computation at the query point:** chat (`marine_data_agent.run_marine_data_agent` → `_live_or_mock_candidate_zones` → `pfz_service.get_nearest_anchor_zones`) resolves the query location to whichever of the 11 anchor regions above is closest by haversine distance, and reads *that anchor's* cached zones — recomputing `distance_km` from the real query point, but the zone *locations* themselves are still that anchor's cached regional result, not a fresh front-detection run at the exact coordinates asked about. Because the anchor grid is sparse (anchors sit ~277–1166km apart from their nearest neighbor), a query far from every anchor still resolves to the nearest one rather than erroring — but when that anchor is more than 75km away (`_NEARBY_ANCHOR_THRESHOLD_KM`), chat says so plainly instead of presenting a distant regional match as an ordinary nearby result:
+**Chat's own lookup — nearest-anchor, not a fresh computation at the query point:** chat (`marine_data_agent.run_marine_data_agent` → `_live_pfz_candidate_zones` → `pfz_service.get_nearest_anchor_zones`) resolves the query location to whichever of the 11 anchor regions above is closest by haversine distance, and reads *that anchor's* cached zones — recomputing `distance_km` from the real query point, but the zone *locations* themselves are still that anchor's cached regional result, not a fresh front-detection run at the exact coordinates asked about. Because the anchor grid is sparse (anchors sit ~277–1166km apart from their nearest neighbor), a query far from every anchor still resolves to the nearest one rather than erroring — but when that anchor is more than 75km away (`_NEARBY_ANCHOR_THRESHOLD_KM`), chat says so plainly instead of presenting a distant regional match as an ordinary nearby result:
 
 > Nearest known fishing-zone data: PFZ-001 (94.69 km away) — this is the closest live data available, but it's well outside typical local range; treat it as a regional reference, not a nearby recommendation
 
-(vs. the normal-case phrasing, `Nearest fishing zone: PFZ-001 (8.0 km away)`, when the resolved anchor is within threshold — see `reporting.py`'s `_format_geospatial`/`_nearest_zone_is_distant`.) Chat falls back to the same heuristic mock generator (`PFZ-MOCK-*` tagging preserved) on any live-lookup failure, timeout (`_LIVE_PFZ_LOOKUP_TIMEOUT`), or empty live result — it never silently presents mock data as live, and never errors out to the user just because live data wasn't available that turn.
+(vs. the normal-case phrasing, `Nearest fishing zone: PFZ-001 (8.0 km away)`, when the resolved anchor is within threshold — see `reporting.py`'s `_format_geospatial`/`_nearest_zone_is_distant`.) On any live-lookup failure, timeout (`_LIVE_PFZ_LOOKUP_TIMEOUT`, 10s), or empty live result, chat gets no PFZ zones: the Marine Data agent returns `status="error"` ("no live PFZ zones available for this location") and the response is built from the remaining evidence — it never substitutes mock zones, and never crashes the request.
 
 **Honest caveats, inherent to this method (not bugs):**
 - **~1 day lag** — "live" means the most recent satellite pass, not real-time-this-second.
@@ -199,10 +203,12 @@ backend/
                                     # pfz_service.py — live SST/chlorophyll front detection + the
                                     # shared cache chat, Zones Explorer, /route, /alerts,
                                     # /weather/forecast, /export all read (see dedicated section above)
+  auth.py / rate_limit.py          # optional X-API-Key auth + per-IP rate limiting middlewares
   models/                          # trained forecast .pkl artifacts (committed, regenerable)
   scripts/
     fetch_mpa_boundaries.py        # one-time/periodic refresh of the MPA cache above
     train_forecast_models.py       # trains the 7-day wave/wind forecast models
+    validate_forecast_models.py    # checks the trained .pkl files load and match the training features
 frontend/
   src/App.tsx            # react-router routes for all 9 pages
   src/components/
@@ -218,14 +224,15 @@ Trace requirement (§5.3/§5.5): every deterministic function appends a `TraceSt
 
 ## Testing
 
-Run these from the **project root** too, for the same reason as above:
+Run these from the **project root** too, for the same reason as above. The backend suite needs a migrated `orca_test` database (see `backend/tests/conftest.py`) — one-time: `createdb orca_test`, then from `backend/`: `DATABASE_URL=postgresql+asyncpg://$USER@localhost:5432/orca_test alembic upgrade head`.
 
 ```bash
-# backend — full suite (294 tests: 9 core agents + Phase 8 history layer +
-# live PFZ front detection/cache/single-flight lock + chat's live wiring +
-# startup pre-warm; 2 of the 294 are a gated live end-to-end smoke test —
-# see backend/tests/test_live_smoke.py — that only runs with a real
-# GROQ_API_KEY, otherwise skips instantly)
+# backend — full suite: 9 core agents + history layer + PFZ front
+# detection/cache + chat's live wiring + startup pre-warm. External APIs are
+# mocked (PFZ endpoint tests use a synthetic satellite grid — see
+# conftest.py's offline_pfz_data). test_live_smoke.py is the exception: a
+# gated live end-to-end test that only runs with a real GROQ_API_KEY,
+# otherwise skips instantly
 source backend/.venv/bin/activate
 PYTHONPATH="$(pwd)" pytest backend/tests/ -q
 # via HTTP
