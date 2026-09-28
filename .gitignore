@@ -47,3 +47,4 @@ Datasets/
 # Logs
 *.log
 npm-debug.log*
+docs/
