@@ -1,32 +1,30 @@
-# ORCA — Marine EcoSystem Reasoning with Collaborative Agents
+# ORCA
 
-A multi-agent marine intelligence platform: ask one question about the sea, in your own language, and get a single evidence-backed answer with a map, a safety verdict and a live agent trace.
+Marine EcoSystem Reasoning with Collaborative Agents. Our Smart India Hackathon 2026 project for problem statement SIH26176 (ISRO, Space Technology, Software).
 
 [![CI](https://github.com/Varunkumar-07/orca-sih2026/actions/workflows/ci.yml/badge.svg)](https://github.com/Varunkumar-07/orca-sih2026/actions/workflows/ci.yml)
 
-Built for Smart India Hackathon 2026
-
-Problem Statement **SIH26176** · ISRO · Theme: Disaster Management · Category: Software
-
----
-
 ## Problem
 
-People who work at sea have to answer one question every day: is it safe and productive to go out at this location right now? The answer is scattered across separate sources: fishing-zone advisories, weather and cyclone warnings, marine-protected-area boundaries and satellite ocean data. None of them is combined into one plain-language answer. SIH26176 asks for an agentic, multi-agent AI system that correlates these sources into one answer.
+Fishermen need to know whether a location is safe and worth going to today. That information exists, but it's spread across separate sources: PFZ advisories, weather and cyclone warnings, marine protected area boundaries, and satellite ocean data. SIH26176 asks for a multi-agent AI system that combines these into one answer.
 
 ## What ORCA does
 
-- **Conversational query pipeline.** Accepts a natural-language question and returns one merged answer with a risk verdict, map pins and overlays, and a step-by-step trace of every agent's input and output.
-- **Multilingual.** Detects the query's script locally (Hindi, Bengali, Punjabi, Gujarati, Odia, Tamil, Telugu, Kannada, Malayalam, Urdu). It translates the query to English and the answer back using Bhashini.
-- **Session memory.** Follow-up questions like "what about Friday?" reuse the last location for 30 minutes.
-- **Potential Fishing Zones (PFZ) from live satellite data.** Detects SST and chlorophyll fronts in Copernicus Marine grids around 11 coastal anchor cities, returning up to 3 zones per anchor.
-- **Restricted-zone geofencing.** Checks locations against real Marine Protected Area polygons from WDPA (Protected Planet), cached locally. A location inside a protected area always gets a PROHIBITED verdict.
-- **Hazard-avoiding routes.** Plans a route with A* search over a grid, treating restricted zones as impassable.
-- **Weather and 7-day forecast.** Shows current wind, waves and SST from Open-Meteo. Its own RandomForest models forecast wave height and wind for the next 7 days.
-- **Alerts.** Raises cyclone and thunderstorm advisories for every tracked fishing zone.
-- **Historical analytics and export.** Provides multi-variable historical time series, downloadable as CSV, JSON, PDF or DOCX.
-- **History.** Logs every lookup across the platform to PostgreSQL, browsable on its own page.
-- **Degrades gracefully.** Every external key is optional. A missing key or failed feed gives a partial answer that says so, not a crash. `POST /query/demo` runs fully offline from built-in fixtures.
+You ask a question in plain language, in English or one of 10 Indian languages. A chain of agents works out the location and intent, pulls marine and weather data, assesses risk, and returns one answer with a verdict, a map, and a trace of what each agent did.
+
+Features:
+
+- Potential Fishing Zones detected from Copernicus SST and chlorophyll data around 11 coastal cities (up to 3 zones each)
+- Geofencing against WDPA marine protected area polygons; any location inside one is marked PROHIBITED
+- A* route planning that avoids restricted zones
+- Current weather from Open-Meteo, plus our own RandomForest models for a 7-day wave and wind forecast
+- Cyclone and thunderstorm alerts for tracked fishing zones
+- Historical data with CSV, JSON, PDF and DOCX export
+- Query history stored in PostgreSQL
+- Follow-up questions like "what about Friday?" reuse the last location for 30 minutes
+- Translation through Bhashini (Hindi, Bengali, Punjabi, Gujarati, Odia, Tamil, Telugu, Kannada, Malayalam, Urdu)
+
+All API keys are optional. If one is missing or a feed fails, the answer says what's missing instead of crashing. `POST /query/demo` runs fully offline.
 
 The frontend has 9 pages: Home, Chat + Map, Zones Explorer, Weather, Route Planner, Alerts, Analytics, Download and History.
 
@@ -244,5 +242,5 @@ Endpoint reference and implementation details: [`backend/README.md`](backend/REA
 | Varun Kumar U | Backend & ML | [@Varunkumar-07](https://github.com/Varunkumar-07) |
 | Mohammed Bilal Sharief | Backend & ML | [@MOHAMMEDBILAL-007](https://github.com/MOHAMMEDBILAL-007) |
 | Vedha V | Frontend | [@ved-24-2006](https://github.com/ved-24-2006) |
-| Mk Reddy Venkata Santhosh | Research | [@SANTHOSHMK07](https://github.com/SANTHOSHMK07) |
+| M.K. Reddy Venkata Santhosh | Research | [@SANTHOSHMK07](https://github.com/SANTHOSHMK07) |
 | Rakesh Patil | Design | [@Raku770](https://github.com/Raku770) |
