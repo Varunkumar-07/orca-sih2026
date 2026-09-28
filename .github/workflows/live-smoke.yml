@@ -1,0 +1,68 @@
+name: Live smoke test (real Groq)
+
+# backend/tests/test_live_smoke.py is the one test in this repo that makes
+# a real Groq LLM call (and, when configured, a real Copernicus fetch) —
+# audit backlog item #4 ("requires manual trigger — only runs with a real
+# GROQ_API_KEY set; never wired into any automation"). Deliberately kept
+# OUT of the main push/PR pipeline (.github/workflows/ci.yml): it costs
+# real API usage, can take ~1-2 minutes (cold PFZ cache pre-warm across 11
+# anchors), and — like any live third-party call — is inherently less
+# reliable than the fully-mocked suite that already gates every PR. This
+# runs on a schedule plus an on-demand manual trigger instead — exactly
+# the "run explicitly before demo day" use case the test's own docstring
+# describes, just automated rather than only-by-hand now.
+#
+# Needs a repo secret named GROQ_API_KEY (Settings -> Secrets and
+# variables -> Actions) to actually exercise the live path — without it,
+# test_live_smoke.py's own skipif gate reports every test skipped rather
+# than failing the job. COPERNICUSMARINE_USERNAME/PASSWORD are optional,
+# same as running this test locally (see its own docstring).
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 6 * * *" # daily, 06:00 UTC — cheap enough (a handful of live calls) to run often, keeping the live path exercised continuously rather than only right before a demo.
+
+jobs:
+  live-smoke:
+    name: test_live_smoke.py (real Groq call)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: changeme
+          POSTGRES_DB: orca_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:changeme@localhost:5432/orca_test
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      COPERNICUSMARINE_USERNAME: ${{ secrets.COPERNICUSMARINE_USERNAME }}
+      COPERNICUSMARINE_PASSWORD: ${{ secrets.COPERNICUSMARINE_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Apply history table migrations
+        working-directory: backend
+        run: alembic upgrade head
+
+      - name: Run the live smoke test
+        run: PYTHONPATH=. python -m pytest backend/tests/test_live_smoke.py -v

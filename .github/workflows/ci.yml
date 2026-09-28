@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # Ephemeral, job-scoped container destroyed at the end of the run —
+          # not a real credential, so "changeme" here (not a made-up secret)
+          # rather than a real-looking password.
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: changeme
+          POSTGRES_DB: orca_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Async driver, matching backend/history/db.py — no GROQ_API_KEY,
+      # COPERNICUSMARINE_*, PROTECTED_PLANET_API_KEY, or BHASHINI_* secrets
+      # here on purpose: every one of those is optional and the backend (and
+      # its whole test suite) is designed to degrade to fixtures/mocks
+      # without them (see backend/.env.example) — test_live_smoke.py
+      # self-skips without a real GROQ_API_KEY, so this stays a real CI run
+      # with zero secrets to provision.
+      DATABASE_URL: postgresql+asyncpg://postgres:changeme@localhost:5432/orca_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Apply history table migrations
+        working-directory: backend
+        run: alembic upgrade head
+
+      - name: Run backend test suite
+        run: PYTHONPATH=. python -m pytest backend/tests -v
+
+  frontend:
+    name: Frontend (vitest)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type-check and build
+        run: npm run build
+
+      - name: Run frontend test suite
+        run: npm test

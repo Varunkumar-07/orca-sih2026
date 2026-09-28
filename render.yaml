@@ -1,0 +1,73 @@
+databases:
+  # Free tier: Render deletes it 90 days after creation (their own free-plan
+  # limit, not something this file controls) — fine for an SIH demo window,
+  # but worth knowing if this is still running by then. Upgrade the plan
+  # below (or re-provision) if the project outlives that.
+  - name: orca-db
+    databaseName: orca
+    user: orca
+    plan: free
+
+services:
+  # FastAPI backend — must run from the repo root (not rootDir: backend),
+  # since every module imports with the absolute "backend.xxx" prefix (see
+  # backend/README.md's "Common mistake" note). Build/start commands below
+  # reflect that.
+  - type: web
+    name: orca-backend
+    runtime: python
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      # Auto-wired from the orca-db instance above — no manual copy-paste of
+      # a connection string. Render's connectionString is plain postgres://
+      # (no driver); backend/history/db.py's normalize_asyncpg_url() rewrites
+      # it to postgresql+asyncpg:// at read time. One remaining manual step
+      # after first deploy: run `alembic upgrade head` once against this
+      # database (e.g. from Render's shell for orca-backend, or locally with
+      # DATABASE_URL pointed at orca-db's external connection string) —
+      # deliberately not automated at every app boot, to avoid several
+      # concurrent instances racing to migrate the same database at once.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: orca-db
+          property: connectionString
+      # Everything below is optional — the backend degrades gracefully when
+      # unset (see backend/.env.example for exactly what each one affects).
+      # Set real values for these in the Render dashboard (Environment tab),
+      # not here, since they're secrets and this file is committed:
+      #   GROQ_API_KEY, PROTECTED_PLANET_API_KEY, BHASHINI_USER_ID,
+      #   BHASHINI_ULCA_API_KEY, COPERNICUSMARINE_USERNAME,
+      #   COPERNICUSMARINE_PASSWORD, ORCA_API_KEY
+
+  # Vite/React frontend, served as a static site. The rewrite below proxies
+  # /api/* to the backend service server-side (Render's edge does the
+  # proxying) — the browser only ever sees requests to orca-frontend's own
+  # origin, so this needs no CORS changes on the backend and no frontend
+  # code changes (every page already calls relative /api/... paths, same
+  # convention as the local Vite dev proxy in frontend/vite.config.ts).
+  - type: web
+    name: orca-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      # Optional. Vite bakes this into the JS bundle at build time (static
+      # site, no server-side secrets), so it must match backend orca-backend's
+      # ORCA_API_KEY exactly, and a change here needs a redeploy to take
+      # effect. Leave unset to keep the API open, same as leaving the
+      # backend's ORCA_API_KEY unset (see backend/.env.example). Set real
+      # value in the Render dashboard (Environment tab), not here.
+      - key: VITE_ORCA_API_KEY
+        sync: false
+    routes:
+      - type: rewrite
+        source: /api/*
+        destination: https://orca-backend.onrender.com/*
+      - type: rewrite
+        source: /*
+        destination: /index.html

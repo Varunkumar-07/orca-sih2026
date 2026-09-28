@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# ORCA pre-commit secret scanner.
+#
+# Blocks commits that stage credential-like files or content. No external
+# dependencies (no gitleaks/git-secrets install required) — just git + grep,
+# so it works identically for anyone with this repo checked out. Only scans
+# staged changes (not the whole tree), so it stays fast on normal commits.
+#
+# Activated via: git config core.hooksPath .githooks   (see .githooks/README.md)
+
+set -euo pipefail
+
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+blocked=0
+
+# --- 1. Filename-based blocks -------------------------------------------------
+staged_files=$(git diff --cached --name-only --diff-filter=ACM || true)
+
+blocked_name_patterns=(
+  '(^|/)\.netrc$'
+  '(^|/)\.copernicusmarine-credentials$'
+  '(^|/)\.env$'
+  '(^|/)\.env\.[^.]+$'
+  '\.pem$'
+  '\.p12$'
+  '\.pfx$'
+  '(^|/)id_rsa($|\.)'
+  '(^|/)id_ed25519($|\.)'
+)
+
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  case "$f" in
+    *.env.example|*.env.template|*.env.sample) continue ;;
+  esac
+  for pat in "${blocked_name_patterns[@]}"; do
+    if echo "$f" | grep -qE -- "$pat"; then
+      echo -e "${RED}blocked:${NC} $f  (looks like a credential file — matched: $pat)"
+      blocked=1
+    fi
+  done
+done <<< "$staged_files"
+
+# --- 2. Content-based scan on staged additions only ---------------------------
+diff_content=$(git diff --cached -U0 --diff-filter=ACM -- . \
+  ':(exclude)*.lock' ':(exclude)package-lock.json' ':(exclude)*.svg' \
+  2>/dev/null || true)
+added_lines=$(echo "$diff_content" | grep -E '^\+' | grep -vE '^\+\+\+' || true)
+
+# Known API key / token formats
+key_patterns=(
+  'gsk_[A-Za-z0-9]{20,}'                 # Groq
+  'sk-[A-Za-z0-9]{20,}'                  # OpenAI
+  'ghp_[A-Za-z0-9]{30,}'                 # GitHub PAT
+  'AKIA[0-9A-Z]{16}'                     # AWS access key ID
+  'xox[baprs]-[A-Za-z0-9-]{10,}'         # Slack token
+  '-----BEGIN [A-Z ]*PRIVATE KEY-----'   # PEM private key block
+)
+
+for pat in "${key_patterns[@]}"; do
+  hit=$(echo "$added_lines" | grep -E -- "$pat" || true)
+  if [ -n "$hit" ]; then
+    echo -e "${RED}blocked:${NC} staged change matches a known API key format ($pat)"
+    blocked=1
+  fi
+done
+
+# Generic password/secret/token/api_key near an assignment, with an
+# allowlist for obvious placeholders and common "read from env" code
+# patterns (which are not secrets, just the variable that holds one).
+generic_hit=$(echo "$added_lines" \
+  | grep -iE '(password|secret|token|api[_-]?key)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9/+_.-]{6,}' \
+  | grep -viE 'your-|your_|<|example|placeholder|changeme|xxxx|REDACTED|\bnone\b|\bnull\b|os\.getenv|os\.environ|process\.env|getenv\(|import\.meta\.env|api_key=api_key|api_key = api_key|password=password|password = password|username=username|username = username|\+\+|--|\.current\b|\.value\b' \
+  || true)
+
+if [ -n "$generic_hit" ]; then
+  echo -e "${YELLOW}flagged:${NC} possible credential assignment in staged changes:"
+  echo "$generic_hit" | sed 's/^/    /'
+  blocked=1
+fi
+
+if [ "$blocked" -ne 0 ]; then
+  echo ""
+  echo -e "${RED}Commit blocked${NC} — staged changes look like they contain credentials."
+  echo "If this is a genuine false positive: adjust the pattern in .githooks/pre-commit,"
+  echo "or as a last resort, run: git commit --no-verify (not recommended)."
+  exit 1
+fi
+
+exit 0

@@ -1,0 +1,57 @@
+name: Forecast models (regenerate + validate)
+
+# Deliberately NOT on push/pull_request — backend/models/*.pkl are
+# gitignored (audit backlog item #12) and training fetches ~4 years of
+# real history from Open-Meteo across 11 anchors x 7 horizons, which is
+# too slow and too dependent on a live third-party API to gate every PR.
+# This runs on a schedule instead, plus workflow_dispatch for an on-demand
+# run — either way it only reports pass/fail (and uploads the trained
+# models as a downloadable artifact); it never commits anything, since the
+# .pkl files are intentionally kept out of version control.
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 3 * * 0" # weekly, Sunday 03:00 UTC
+
+jobs:
+  train-and-validate:
+    name: Train + validate forecast models
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Train forecast models
+        run: python -m backend.scripts.train_forecast_models
+
+      - name: Validate trained models
+        run: python -m backend.scripts.validate_forecast_models
+
+      - name: Upload trained models as a build artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forecast-models
+          path: backend/models/*.pkl
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload metrics + feature importance as a build artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: forecast-model-metrics
+          path: |
+            backend/models/forecast_metrics.json
+            backend/models/forecast_feature_importance.json
+          if-no-files-found: warn
+          retention-days: 90
