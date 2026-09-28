@@ -134,9 +134,9 @@ Chat and `GET /zones` both serve Potential Fishing Zones computed from real sate
 
 **Chat's own lookup — nearest-anchor, not a fresh computation at the query point:** chat (`marine_data_agent.run_marine_data_agent` → `_live_pfz_candidate_zones` → `pfz_service.get_nearest_anchor_zones`) resolves the query location to whichever of the 11 anchor regions above is closest by haversine distance, and reads *that anchor's* cached zones — recomputing `distance_km` from the real query point, but the zone *locations* themselves are still that anchor's cached regional result, not a fresh front-detection run at the exact coordinates asked about. Because the anchor grid is sparse (anchors sit ~277–1166km apart from their nearest neighbor), a query far from every anchor still resolves to the nearest one rather than erroring — but when that anchor is more than 75km away (`_NEARBY_ANCHOR_THRESHOLD_KM`), chat says so plainly instead of presenting a distant regional match as an ordinary nearby result:
 
-> Nearest known fishing-zone data: PFZ-001 (94.69 km away) — this is the closest live data available, but it's well outside typical local range; treat it as a regional reference, not a nearby recommendation
+> Nearest known fishing-zone data: &lt;ANCHOR&gt;-PFZ-001 (&lt;distance&gt; km away) — this is the closest live data available, but it's well outside typical local range; treat it as a regional reference, not a nearby recommendation
 
-(vs. the normal-case phrasing, `Nearest fishing zone: PFZ-001 (8.0 km away)`, when the resolved anchor is within threshold — see `reporting.py`'s `_format_geospatial`/`_nearest_zone_is_distant`.) On any live-lookup failure, timeout (`_LIVE_PFZ_LOOKUP_TIMEOUT`, 10s), or empty live result, chat gets no PFZ zones: the Marine Data agent returns `status="error"` ("no live PFZ zones available for this location") and the response is built from the remaining evidence — it never substitutes mock zones, and never crashes the request.
+(vs. the normal-case phrasing, `Nearest fishing zone: <ANCHOR>-PFZ-001 (<distance> km away)`, when the resolved anchor is within threshold — see `reporting.py`'s `_format_geospatial`/`_nearest_zone_is_distant`.) On any live-lookup failure, timeout (`_LIVE_PFZ_LOOKUP_TIMEOUT`, 10s), or empty live result, chat gets no PFZ zones: the Marine Data agent returns `status="error"` ("no live PFZ zones available for this location") and the response is built from the remaining evidence — it never substitutes mock zones, and never crashes the request.
 
 **Honest caveats, inherent to this method (not bugs):**
 - **~1 day lag** — "live" means the most recent satellite pass, not real-time-this-second.
@@ -220,7 +220,7 @@ frontend/
                            # Alerts, Analytics, Download, History
 ```
 
-Trace requirement (§5.3/§5.5): every deterministic function appends a `TraceStep` to `bundle.trace` before returning.
+Trace requirement: every deterministic function appends a `TraceStep` to `bundle.trace` before returning.
 
 ## Testing
 

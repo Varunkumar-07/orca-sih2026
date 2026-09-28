@@ -4,6 +4,8 @@ A multi-agent marine intelligence platform: ask one question about the sea, in y
 
 [![CI](https://github.com/Varunkumar-07/orca-sih2026/actions/workflows/ci.yml/badge.svg)](https://github.com/Varunkumar-07/orca-sih2026/actions/workflows/ci.yml)
 
+Built for Smart India Hackathon 2026
+
 Problem Statement **SIH26176** · ISRO · Theme: Disaster Management · Category: Software
 
 ---
@@ -234,13 +236,13 @@ Endpoint reference and implementation details: [`backend/README.md`](backend/REA
 
 ## Team
 
-**Team NEXORA**
+**Team NEXORA** · Team ID: 159223
 
 | Name | Role | GitHub |
 |---|---|---|
-| | | |
-| | | |
-| | | |
-| | | |
-| | | |
-| | | |
+| Kinshue Priya M | Frontend | [@Kinshuepriya](https://github.com/Kinshuepriya) |
+| Varun Kumar U | Backend & ML | [@Varunkumar-07](https://github.com/Varunkumar-07) |
+| Mohammed Bilal Sharief | Backend & ML | [@MOHAMMEDBILAL-007](https://github.com/MOHAMMEDBILAL-007) |
+| Vedha V | Frontend | [@ved-24-2006](https://github.com/ved-24-2006) |
+| Mk Reddy Venkata Santhosh | Research | [@SANTHOSHMK07](https://github.com/SANTHOSHMK07) |
+| Rakesh Patil | Design | [@Raku770](https://github.com/Raku770) |
