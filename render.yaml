@@ -71,7 +71,7 @@ services:
     routes:
       - type: rewrite
         source: /api/*
-        destination: https://orca-backend.onrender.com/*
+        destination: https://orca-backend-lfn0.onrender.com/*
       - type: rewrite
         source: /*
         destination: /index.html
