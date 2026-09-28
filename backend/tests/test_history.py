@@ -21,31 +21,27 @@ import asyncio
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.agents.reasoning import marine_data_agent as mda
 from backend.history import db as history_db
+from backend.history.middleware import wait_for_pending_history_writes
 from backend.history.service import list_history, log_history
 from backend.main import app
 
 
-@pytest.fixture(autouse=True)
-def _no_live_pfz_fetch(monkeypatch):
-    """This file's /zones (and /export, which calls it internally) tests
-    aren't about PFZ front detection — without this, they'd trigger a real
-    ~55s live Copernicus fetch across all 11 anchors on every run. Forcing
-    the live fetch to report "unavailable" exercises the exact same
-    mock-fallback path a real Copernicus outage would, so these tests stay
-    fast, deterministic, and offline, without weakening what they check."""
-    monkeypatch.setattr(mda, "fetch_environmental_grid", lambda *_a, **_k: _async_none())
-
-
-async def _async_none():
-    return None
-
-
 @pytest.fixture(scope="module")
-def client():
+def client(offline_pfz_data):
+    """offline_pfz_data (conftest.py): /zones and /export need PFZ zones
+    without live Copernicus access."""
     with TestClient(app) as c:
         yield c
+
+
+def _history(client, params):
+    """GET /history after draining pending writes — HistoryLoggingMiddleware
+    logs fire-and-forget, so an immediate read can otherwise race the row
+    being asserted on (this is what failed on CI's fresh database; locally,
+    rows left from earlier runs masked it)."""
+    client.portal.call(wait_for_pending_history_writes)
+    return client.get("/history", params=params)
 
 
 def test_history_db_is_enabled_for_tests():
@@ -62,7 +58,7 @@ def test_query_demo_is_logged_as_chat_history(client):
     assert resp.status_code == 200
     assert "answer_text" in resp.json()  # unchanged FinalResponse contract
 
-    listing = client.get("/history", params={"page_source": "chat", "limit": 5})
+    listing = _history(client, {"page_source": "chat", "limit": 5})
     assert listing.status_code == 200
     body = listing.json()
     assert body["items"], "expected at least one chat history row"
@@ -75,7 +71,7 @@ def test_query_demo_session_id_roundtrips_into_history(client):
     resp = client.post("/query/demo", json={"query": "goa weather", "session_id": "test-session-abc"})
     assert resp.status_code == 200
 
-    listing = client.get("/history", params={"page_source": "chat", "limit": 20})
+    listing = _history(client, {"page_source": "chat", "limit": 20})
     matches = [item for item in listing.json()["items"] if item["session_id"] == "test-session-abc"]
     assert matches, "expected a history row logged under the request's own session_id"
 
@@ -84,8 +80,8 @@ def test_history_list_pagination_and_filter_by_page_source(client):
     for _ in range(3):
         client.post("/query/demo", json={"query": "chennai fishing zones"})
 
-    page1 = client.get("/history", params={"page_source": "chat", "limit": 2, "offset": 0}).json()
-    page2 = client.get("/history", params={"page_source": "chat", "limit": 2, "offset": 2}).json()
+    page1 = _history(client, {"page_source": "chat", "limit": 2, "offset": 0}).json()
+    page2 = _history(client, {"page_source": "chat", "limit": 2, "offset": 2}).json()
 
     assert len(page1["items"]) == 2
     assert page1["total"] >= 5  # at least the rows from this + prior tests
@@ -93,15 +89,15 @@ def test_history_list_pagination_and_filter_by_page_source(client):
 
 
 def test_history_list_filters_by_date_range(client):
-    today = client.get("/history", params={"start_date": "2000-01-01", "end_date": "2999-12-31"}).json()
-    future_only = client.get("/history", params={"start_date": "2999-12-31", "end_date": "2999-12-31"}).json()
+    today = _history(client, {"start_date": "2000-01-01", "end_date": "2999-12-31"}).json()
+    future_only = _history(client, {"start_date": "2999-12-31", "end_date": "2999-12-31"}).json()
     assert today["total"] > 0
     assert future_only["total"] == 0
 
 
 def test_history_detail_returns_request_and_response_payload(client):
     client.post("/query/demo", json={"query": "kochi restricted zone check"})
-    listing = client.get("/history", params={"page_source": "chat", "limit": 1}).json()
+    listing = _history(client, {"page_source": "chat", "limit": 1}).json()
     record_id = listing["items"][0]["id"]
 
     detail = client.get(f"/history/{record_id}")
@@ -121,14 +117,14 @@ def test_history_detail_404_for_unknown_id(client):
 def test_history_endpoint_itself_is_not_logged(client):
     """Browsing history shouldn't create more history — GET /history and
     GET /history/{id} aren't in HistoryLoggingMiddleware's path map."""
-    first_listing = client.get("/history", params={"limit": 1}).json()
+    first_listing = _history(client, {"limit": 1}).json()
     before = first_listing["total"]
     record_id = first_listing["items"][0]["id"]
 
-    client.get("/history", params={"limit": 1})
+    _history(client, {"limit": 1})
     client.get(f"/history/{record_id}")
 
-    after = client.get("/history", params={"limit": 1}).json()["total"]
+    after = _history(client, {"limit": 1}).json()["total"]
     assert after == before
 
 
@@ -146,7 +142,7 @@ def test_export_download_page_is_logged_with_response_metadata_not_raw_bytes(cli
     )
     assert resp.status_code == 200
 
-    listing = client.get("/history", params={"page_source": "download", "limit": 1}).json()
+    listing = _history(client, {"page_source": "download", "limit": 1}).json()
     assert listing["items"], "expected a download history row"
     detail = client.get(f"/history/{listing['items'][0]['id']}").json()
     assert detail["payload"]["response"]["content_type"].startswith("text/csv")
@@ -156,7 +152,7 @@ def test_export_download_page_is_logged_with_response_metadata_not_raw_bytes(cli
 def test_zones_page_is_logged(client):
     resp = client.get("/zones")
     assert resp.status_code == 200
-    listing = client.get("/history", params={"page_source": "zones", "limit": 1}).json()
+    listing = _history(client, {"page_source": "zones", "limit": 1}).json()
     assert listing["items"]
 
 
@@ -234,6 +230,6 @@ def test_query_demo_still_responds_normally_through_a_mid_request_db_outage(monk
 
 
 def test_history_filter_by_unknown_page_source_returns_empty(client):
-    result = client.get("/history", params={"page_source": "not-a-real-page", "limit": 5}).json()
+    result = _history(client, {"page_source": "not-a-real-page", "limit": 5}).json()
     assert result["items"] == []
     assert result["total"] == 0

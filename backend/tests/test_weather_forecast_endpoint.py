@@ -24,7 +24,9 @@ from backend.services import forecast_service as svc
 
 
 @pytest.fixture(scope="module")
-def client():
+def client(offline_pfz_data):
+    """offline_pfz_data (conftest.py): zone-id resolution needs PFZ zones in
+    GET /zones's catalog without live Copernicus access."""
     with TestClient(app) as c:
         yield c
 
@@ -59,8 +61,7 @@ def _first_restricted_zone_id(client: TestClient) -> str | None:
 
 def test_forecast_for_a_real_zone_returns_seven_predictions(client):
     zone_id = _first_pfz_zone_id(client)
-    if zone_id is None:
-        pytest.skip("no live PFZ zone available in this environment's cache to test against")
+    assert zone_id is not None, "expected a PFZ zone in GET /zones (offline_pfz_data fixture)"
 
     resp = client.get("/weather/forecast", params={"zone": zone_id})
     assert resp.status_code == 200

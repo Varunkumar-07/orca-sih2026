@@ -33,7 +33,9 @@ from backend.main import app
 
 
 @pytest.fixture(scope="module")
-def client():
+def client(offline_pfz_data):
+    """offline_pfz_data (conftest.py): destination_zone_id resolution needs
+    PFZ zones in GET /zones's catalog without live Copernicus access."""
     with TestClient(app) as c:
         yield c
 

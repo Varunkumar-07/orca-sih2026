@@ -38,6 +38,16 @@ def _log_in_background(**kwargs: Any) -> None:
     task.add_done_callback(_background_tasks.discard)
 
 
+async def wait_for_pending_history_writes() -> None:
+    """Block until every in-flight log_history() task has finished. The
+    writes are fire-and-forget by design, so a GET /history issued right
+    after a logged request can otherwise race its row's commit — this is
+    how tests (via TestClient.portal, on the app's own event loop) read
+    history deterministically."""
+    if _background_tasks:
+        await asyncio.gather(*list(_background_tasks), return_exceptions=True)
+
+
 PAGE_SOURCE_BY_PATH = {
     "/query": "chat",
     "/query/full": "chat",
