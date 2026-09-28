@@ -115,7 +115,7 @@ cp .env.example .env
 
 Edit `backend/.env`:
 - Set `DATABASE_URL` to your local Postgres user and database.
-- Delete every line you don't have a real value for. All keys are optional, and a leftover placeholder for the Copernicus credentials will be sent as a real login attempt.
+- Fill in any keys you have. All keys are optional, and any left as the `your-...-here` placeholder are treated as unset.
 
 Then create the database, apply migrations and start the server:
 

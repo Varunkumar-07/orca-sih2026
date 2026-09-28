@@ -41,7 +41,7 @@ npm run build # production check — must pass for demo
 
 ## Environment
 
-Copy `.env.example` to `.env` and fill in whichever of these you want live (every one of them degrades gracefully when unset — see the comments in `.env.example` for exactly what each does and doesn't affect). Delete the lines you don't have real values for: the Copernicus placeholders aren't recognized as placeholders and would be sent as a real login attempt.
+Copy `.env.example` to `.env` and fill in whichever of these you want live (every one of them degrades gracefully when unset — see the comments in `.env.example` for exactly what each does and doesn't affect). Values left as the `your-...-here` placeholders are treated as unset.
 
 | Variable | Used by | If unset |
 |---|---|---|
