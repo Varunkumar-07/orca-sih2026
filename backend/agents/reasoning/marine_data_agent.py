@@ -49,6 +49,7 @@ from backend.agents.reasoning._groq_client import call_groq_json
 from backend.agents.reasoning._trace import record_trace
 from backend.schemas.contracts import GeoPoint, MarineDataResult, TraceStep
 from backend.services.pfz_service import (
+    SharedGridSources,
     copernicus_credentials,
     fetch_environmental_grid,
     find_pfz_candidates,
@@ -375,7 +376,9 @@ def _pfz_advisory(sst: float, chl: float, satellite_date: str) -> str:
     )
 
 
-async def _live_zones_for_anchor(location: GeoPoint, semaphore: asyncio.Semaphore) -> list[dict]:
+async def _live_zones_for_anchor(
+    location: GeoPoint, semaphore: asyncio.Semaphore, sources: SharedGridSources | None = None
+) -> list[dict]:
     """Real front-detected zones for one anchor city. Returns an empty
     list — never mock/sample data — when live data isn't available for it:
     Copernicus credentials unset, a fetch failure/timeout, genuinely no
@@ -386,7 +389,7 @@ async def _live_zones_for_anchor(location: GeoPoint, semaphore: asyncio.Semaphor
 
     `semaphore` bounds the live Copernicus attempt — see
     _MAX_CONCURRENT_PFZ_ANCHORS for why naive full concurrency doesn't
-    work.
+    work. `sources`: see list_live_pfz_zones.
     """
     try:
         async with semaphore:
@@ -395,6 +398,7 @@ async def _live_zones_for_anchor(location: GeoPoint, semaphore: asyncio.Semaphor
                 location.lon + _PFZ_REGION_BOX_DEG,
                 location.lat - _PFZ_REGION_BOX_DEG,
                 location.lat + _PFZ_REGION_BOX_DEG,
+                sources=sources,
             )
         if grid is not None:
             candidates = find_pfz_candidates(grid, max_zones=3, min_separation_km=15.0)
@@ -432,7 +436,20 @@ async def list_live_pfz_zones(anchors: dict[str, GeoPoint]) -> list[dict]:
     them; this function only builds the shared cache they all read.
     """
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT_PFZ_ANCHORS)
-    results = await asyncio.gather(*(_live_zones_for_anchor(loc, semaphore) for loc in anchors.values()))
+    # One pair of dataset opens over a box covering every anchor, shared by
+    # all of them, instead of one pair per anchor — see SharedGridSources
+    # for why (memory on Render's 512MB free tier).
+    sources = (
+        SharedGridSources(
+            min(loc.lon for loc in anchors.values()) - _PFZ_REGION_BOX_DEG,
+            max(loc.lon for loc in anchors.values()) + _PFZ_REGION_BOX_DEG,
+            min(loc.lat for loc in anchors.values()) - _PFZ_REGION_BOX_DEG,
+            max(loc.lat for loc in anchors.values()) + _PFZ_REGION_BOX_DEG,
+        )
+        if anchors
+        else None
+    )
+    results = await asyncio.gather(*(_live_zones_for_anchor(loc, semaphore, sources) for loc in anchors.values()))
     zones: list[dict] = []
     for anchor_name, candidates in zip(anchors.keys(), results):
         for zone in candidates:

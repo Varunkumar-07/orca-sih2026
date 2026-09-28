@@ -116,17 +116,18 @@ def copernicus_credentials() -> tuple[str, str] | None:
     return username.strip(), password.strip()
 
 
-def _fetch_sst_grid_sync(min_lon: float, max_lon: float, min_lat: float, max_lat: float, username: str, password: str) -> xr.DataArray:
-    """Blocking Copernicus Marine call — run via asyncio.to_thread. Opens
-    the dataset lazily (no file download).
+# Plain lazy (numpy-backed) arrays, no dask. open_dataset's default (-1)
+# only turns dask on once a request spans >50 zarr chunks, which a single
+# anchor box never does but SharedGridSources' all-anchor box does — and
+# with dask on, reading one anchor's one day materializes whole ~80MB
+# (985-day) SST blocks on dask's own thread pool (measured: >1.4GB peak).
+# 0 is falsy, which is what copernicusmarine checks to skip dask chunking.
+_NO_DASK_CHUNKING = 0
 
-    Walks backward from the newest day (within _SST_LOOKBACK_DAYS) to the
-    first one that isn't entirely NaN over this region — same publication-
-    lag fallback as _fetch_chlorophyll_grid_sync, for the same reason:
-    blindly taking the newest day silently starves front detection of any
-    SST signal on a day it happens to be unpublished for this box.
-    """
-    ds = copernicusmarine.open_dataset(
+
+def _open_sst_dataset_sync(min_lon: float, max_lon: float, min_lat: float, max_lat: float, username: str, password: str) -> xr.Dataset:
+    """Blocking, lazy (no data read yet) open of the SST dataset over a box."""
+    return copernicusmarine.open_dataset(
         dataset_id=_SST_DATASET_ID,
         variables=["analysed_sst"],
         minimum_longitude=min_lon,
@@ -135,7 +136,52 @@ def _fetch_sst_grid_sync(min_lon: float, max_lon: float, min_lat: float, max_lat
         maximum_latitude=max_lat,
         username=username,
         password=password,
+        chunk_size_limit=_NO_DASK_CHUNKING,
     )
+
+
+def _open_chlorophyll_dataset_sync(min_lon: float, max_lon: float, min_lat: float, max_lat: float, username: str, password: str) -> xr.Dataset:
+    """Blocking, lazy (no data read yet) open of the chlorophyll dataset over a box."""
+    return copernicusmarine.open_dataset(
+        dataset_id=_CHL_DATASET_ID,
+        variables=["CHL"],
+        minimum_longitude=min_lon,
+        maximum_longitude=max_lon,
+        minimum_latitude=min_lat,
+        maximum_latitude=max_lat,
+        username=username,
+        password=password,
+        chunk_size_limit=_NO_DASK_CHUNKING,
+    )
+
+
+def _select_box(ds: xr.Dataset, min_lon: float, max_lon: float, min_lat: float, max_lat: float) -> xr.Dataset:
+    """Cut one box out of an already-open (wider) dataset — the same cells
+    open_dataset() itself would have returned for that box: its default
+    "inside" coordinate selection is a plain inclusive .sel(slice(...)).
+    Both datasets' coordinates are ascending."""
+    return ds.sel(latitude=slice(min_lat, max_lat), longitude=slice(min_lon, max_lon))
+
+
+def _fetch_sst_grid_sync(
+    min_lon: float, max_lon: float, min_lat: float, max_lat: float, username: str, password: str,
+    source: xr.Dataset | None = None,
+) -> xr.DataArray:
+    """Blocking Copernicus Marine call — run via asyncio.to_thread. Opens
+    the dataset lazily (no file download), or — when `source` is an
+    already-open wider dataset (see SharedGridSources) — just cuts this box
+    out of it.
+
+    Walks backward from the newest day (within _SST_LOOKBACK_DAYS) to the
+    first one that isn't entirely NaN over this region — same publication-
+    lag fallback as _fetch_chlorophyll_grid_sync, for the same reason:
+    blindly taking the newest day silently starves front detection of any
+    SST signal on a day it happens to be unpublished for this box.
+    """
+    if source is not None:
+        ds = _select_box(source, min_lon, max_lon, min_lat, max_lat)
+    else:
+        ds = _open_sst_dataset_sync(min_lon, max_lon, min_lat, max_lat, username, password)
     num_days = ds.sizes.get("time", 1)
     for offset in range(min(_SST_LOOKBACK_DAYS, num_days)):
         da = ds["analysed_sst"].isel(time=num_days - 1 - offset) - 273.15  # Kelvin -> Celsius
@@ -145,10 +191,14 @@ def _fetch_sst_grid_sync(min_lon: float, max_lon: float, min_lat: float, max_lat
     raise ValueError(f"SST grid empty for the last {_SST_LOOKBACK_DAYS} day(s) over this region")
 
 
-def _fetch_chlorophyll_grid_sync(min_lon: float, max_lon: float, min_lat: float, max_lat: float, username: str, password: str) -> xr.DataArray:
+def _fetch_chlorophyll_grid_sync(
+    min_lon: float, max_lon: float, min_lat: float, max_lat: float, username: str, password: str,
+    source: xr.Dataset | None = None,
+) -> xr.DataArray:
     """Blocking Copernicus Marine call — run via asyncio.to_thread. Same
     dataset as marine_data_agent._fetch_chlorophyll_sync, but keeps the
-    full grid instead of collapsing to one nearest point.
+    full grid instead of collapsing to one nearest point. `source`: same
+    as _fetch_sst_grid_sync's.
 
     Walks backward from the newest day (within _CHL_LOOKBACK_DAYS) to the
     first one that isn't entirely NaN over this region — the newest day is
@@ -157,16 +207,10 @@ def _fetch_chlorophyll_grid_sync(min_lon: float, max_lon: float, min_lat: float,
     chlorophyll signal at all, so every anchor looks like "no front found"
     even though the live fetch itself succeeded.
     """
-    ds = copernicusmarine.open_dataset(
-        dataset_id=_CHL_DATASET_ID,
-        variables=["CHL"],
-        minimum_longitude=min_lon,
-        maximum_longitude=max_lon,
-        minimum_latitude=min_lat,
-        maximum_latitude=max_lat,
-        username=username,
-        password=password,
-    )
+    if source is not None:
+        ds = _select_box(source, min_lon, max_lon, min_lat, max_lat)
+    else:
+        ds = _open_chlorophyll_dataset_sync(min_lon, max_lon, min_lat, max_lat, username, password)
     num_days = ds.sizes.get("time", 1)
     for offset in range(min(_CHL_LOOKBACK_DAYS, num_days)):
         da = ds["CHL"].isel(time=num_days - 1 - offset)
@@ -176,16 +220,73 @@ def _fetch_chlorophyll_grid_sync(min_lon: float, max_lon: float, min_lat: float,
     raise ValueError(f"chlorophyll grid empty for the last {_CHL_LOOKBACK_DAYS} day(s) over this region")
 
 
-async def fetch_environmental_grid(min_lon: float, max_lon: float, min_lat: float, max_lat: float) -> EnvironmentalGrid | None:
+class SharedGridSources:
+    """SST + chlorophyll datasets opened once over a box covering every
+    anchor of one zone refresh, so each anchor just slices its own box out
+    of them instead of doing its own open_dataset().
+
+    Memory, not speed, is why this exists: every open_dataset() call builds
+    its own Copernicus auth session plus three fresh boto3 S3 clients
+    (~12MB each), so the old one-open-per-anchor-per-variable approach (22
+    opens per refresh, up to 8 in flight) pushed the process past Render
+    free tier's 512MB and crash-looped it. The datasets are lazy — only the
+    chunks each anchor's box touches are ever read — and are dropped with
+    this object when the refresh ends.
+
+    Opened on first use (not in __init__), so nothing touches the network
+    unless a real grid fetch actually runs. If an open fails, that
+    variable's source stays None and each anchor falls back to opening its
+    own box, exactly as before.
+    """
+
+    def __init__(self, min_lon: float, max_lon: float, min_lat: float, max_lat: float):
+        self._box = (min_lon, max_lon, min_lat, max_lat)
+        self._lock = asyncio.Lock()
+        self._opened = False
+        self.sst: xr.Dataset | None = None
+        self.chl: xr.Dataset | None = None
+
+    async def get(self, username: str, password: str) -> tuple[xr.Dataset | None, xr.Dataset | None]:
+        async with self._lock:
+            if not self._opened:
+                self._opened = True
+                self.sst, self.chl = await asyncio.gather(
+                    self._open(_open_sst_dataset_sync, username, password),
+                    self._open(_open_chlorophyll_dataset_sync, username, password),
+                )
+        return self.sst, self.chl
+
+    async def _open(self, opener, username: str, password: str) -> xr.Dataset | None:
+        last_exc: Exception | None = None
+        for _attempt in range(_GRID_FETCH_MAX_ATTEMPTS):
+            try:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(opener, *self._box, username, password), timeout=_GRID_FETCH_TIMEOUT
+                )
+            except Exception as exc:
+                last_exc = exc
+        logger.warning("PFZ shared dataset open failed (%s), falling back to per-anchor opens: %s", opener.__name__, last_exc)
+        return None
+
+
+async def fetch_environmental_grid(
+    min_lon: float, max_lon: float, min_lat: float, max_lat: float, sources: SharedGridSources | None = None
+) -> EnvironmentalGrid | None:
     """Fetch real SST + chlorophyll grids over a region and align them
     onto one common lat/lon grid. Returns None if credentials are missing
     or either fetch fails/times out — callers must degrade gracefully per
     region (a later phase), not crash the whole PFZ list over one bad box.
+    `sources`, when given, supplies already-open wider datasets to slice
+    this box from (see SharedGridSources).
     """
     creds = copernicus_credentials()
     if creds is None:
         return None
     username, password = creds
+
+    sst_source = chl_source = None
+    if sources is not None:
+        sst_source, chl_source = await sources.get(username, password)
 
     sst_da = chl_da = None
     last_exc: Exception | None = None
@@ -193,11 +294,11 @@ async def fetch_environmental_grid(min_lon: float, max_lon: float, min_lat: floa
         try:
             sst_da, chl_da = await asyncio.gather(
                 asyncio.wait_for(
-                    asyncio.to_thread(_fetch_sst_grid_sync, min_lon, max_lon, min_lat, max_lat, username, password),
+                    asyncio.to_thread(_fetch_sst_grid_sync, min_lon, max_lon, min_lat, max_lat, username, password, sst_source),
                     timeout=_GRID_FETCH_TIMEOUT,
                 ),
                 asyncio.wait_for(
-                    asyncio.to_thread(_fetch_chlorophyll_grid_sync, min_lon, max_lon, min_lat, max_lat, username, password),
+                    asyncio.to_thread(_fetch_chlorophyll_grid_sync, min_lon, max_lon, min_lat, max_lat, username, password, chl_source),
                     timeout=_GRID_FETCH_TIMEOUT,
                 ),
             )

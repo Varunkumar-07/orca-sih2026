@@ -80,7 +80,7 @@ def offline_pfz_data():
     modules."""
     from backend.agents.reasoning import marine_data_agent
 
-    async def fake_fetch(min_lon, max_lon, min_lat, max_lat):
+    async def fake_fetch(min_lon, max_lon, min_lat, max_lat, **_kwargs):
         return _synthetic_front_grid(min_lon, max_lon, min_lat, max_lat)
 
     _reset_zones_cache()
