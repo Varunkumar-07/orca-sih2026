@@ -1,13 +1,12 @@
 name: Forecast models (regenerate + validate)
 
-# Deliberately NOT on push/pull_request — backend/models/*.pkl are
-# gitignored (audit backlog item #12) and training fetches ~4 years of
+# Deliberately NOT on push/pull_request: training fetches ~4 years of
 # real history from Open-Meteo across 11 anchors x 7 horizons, which is
 # too slow and too dependent on a live third-party API to gate every PR.
-# This runs on a schedule instead, plus workflow_dispatch for an on-demand
-# run — either way it only reports pass/fail (and uploads the trained
-# models as a downloadable artifact); it never commits anything, since the
-# .pkl files are intentionally kept out of version control.
+# Runs weekly on a schedule, plus workflow_dispatch for on-demand runs.
+# The trained .pkl files are committed in backend/models/. This workflow
+# retrains and validates them, uploads the results as artifacts, and
+# never commits anything back.
 on:
   workflow_dispatch: {}
   schedule:
