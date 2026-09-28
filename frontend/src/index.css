@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+/* ORCA theme */
+:root {
+  --navy: #0b1d3a;
+  --navy-light: #132a56;
+  --teal: #00c2b2;
+  --teal-dim: #0891b2;
+  --amber: #f59e0b;
+}
+
+* { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* The solid white cards (chips, inputs, stat tiles, etc.) read as too
+   bright against the video background — soften them to ~50% opacity
+   instead of fully opaque white. */
+.bg-white {
+  background-color: rgba(255, 255, 255, 0.5) !important;
+}
+
+/* Leaflet's zoom control is only 30px even on a detected touch device —
+   too small a target below the md breakpoint, where the map is driven by
+   finger rather than mouse. */
+@media (max-width: 767px) {
+  .leaflet-touch .leaflet-bar a {
+    width: 40px !important;
+    height: 40px !important;
+    line-height: 40px !important;
+    font-size: 20px !important;
+  }
+}
