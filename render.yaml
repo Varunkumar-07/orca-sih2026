@@ -1,6 +1,7 @@
 databases:
-  # Free tier: Render deletes it 90 days after creation (their own free-plan
-  # limit, not something this file controls) — fine for an SIH demo window,
+  # Free tier: Render expires it 30 days after creation and deletes it after a
+  # further 14-day grace period (their own free-plan limit, not something this
+  # file controls; only one free database per workspace) — fine for an SIH demo window,
   # but worth knowing if this is still running by then. Upgrade the plan
   # below (or re-provision) if the project outlives that.
   - name: orca-db
@@ -16,6 +17,9 @@ services:
   - type: web
     name: orca-backend
     runtime: python
+    # Explicit free plan — when omitted, Render defaults a Blueprint web
+    # service to a paid instance type and asks for payment details.
+    plan: free
     buildCommand: pip install -r backend/requirements.txt
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
