@@ -39,7 +39,6 @@ _format_geospatial.
 
 import asyncio
 import logging
-import os
 
 import copernicusmarine
 import httpx
@@ -50,6 +49,7 @@ from backend.agents.reasoning._groq_client import call_groq_json
 from backend.agents.reasoning._trace import record_trace
 from backend.schemas.contracts import GeoPoint, MarineDataResult, TraceStep
 from backend.services.pfz_service import (
+    copernicus_credentials,
     fetch_environmental_grid,
     find_pfz_candidates,
     get_nearest_anchor_zones,
@@ -104,7 +104,8 @@ being asked about. Respond with ONLY a JSON object, no other text, in the form:
 # a live chat response. Startup pre-warming is what's supposed to keep the
 # cache warm in normal operation; this timeout is only the safety net for
 # when it hasn't (a fresh deploy, pre-warm itself failing) or the live
-# lookup genuinely hangs — either way chat degrades to the mock generator
+# lookup genuinely hangs — either way chat gets no PFZ zones for that turn
+# (no mock/sample fallback; run_marine_data_agent reports status="error")
 # rather than blocking the user.
 _LIVE_PFZ_LOOKUP_TIMEOUT = 10.0
 
@@ -232,10 +233,10 @@ async def _fetch_live_chlorophyll(location: GeoPoint) -> float | None:
     chlorophyll is supplementary; a missing reading alone shouldn't fail
     the whole marine lookup when PFZ zones and SST are still available.
     """
-    username = os.getenv("COPERNICUSMARINE_USERNAME")
-    password = os.getenv("COPERNICUSMARINE_PASSWORD")
-    if not username or not password:
+    creds = copernicus_credentials()
+    if creds is None:
         return None
+    username, password = creds
     last_exc: Exception | None = None
     for attempt in range(1, _CHL_MAX_ATTEMPTS + 1):
         try:

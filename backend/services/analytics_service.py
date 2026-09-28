@@ -80,11 +80,12 @@ end_date, variables) — same as before this expansion.
 
 import asyncio
 import math
-import os
 from datetime import date, timedelta
 from typing import Any
 
 import httpx
+
+from backend.services.pfz_service import copernicus_credentials
 
 _MARINE_URL = "https://marine-api.open-meteo.com/v1/marine"
 _ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
@@ -407,10 +408,10 @@ async def _fetch_copernicus_series(dataset_id: str, variable: str, lat: float, l
     _fetch_live_chlorophyll: missing credentials, a slow/broken Copernicus
     call, or a timeout all degrade to an empty series rather than raising
     — the caller turns that into this variable's own "error" status."""
-    username = os.getenv("COPERNICUSMARINE_USERNAME")
-    password = os.getenv("COPERNICUSMARINE_PASSWORD")
-    if not username or not password:
+    creds = copernicus_credentials()
+    if creds is None:
         return {"dates": [], "values": []}
+    username, password = creds
     try:
         dates, values = await asyncio.wait_for(
             asyncio.to_thread(_fetch_copernicus_series_sync, dataset_id, variable, lat, lon, start_date, end_date, username, password),

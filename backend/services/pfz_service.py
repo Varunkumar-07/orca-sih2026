@@ -97,12 +97,23 @@ class EnvironmentalGrid:
     satellite_date: str
 
 
-def _credentials() -> tuple[str, str] | None:
-    username = os.getenv("COPERNICUSMARINE_USERNAME")
-    password = os.getenv("COPERNICUSMARINE_PASSWORD")
-    if not username or not password:
+def _is_unset_or_placeholder(value: str) -> bool:
+    """Same rule as routers/chat.py's GROQ_API_KEY check: an unedited
+    .env.example value ("your-...-here") counts as unset, so it never
+    reaches Copernicus as a real login attempt."""
+    normalized = value.strip().lower()
+    return not normalized or normalized.startswith(("your-", "your_"))
+
+
+def copernicus_credentials() -> tuple[str, str] | None:
+    """COPERNICUSMARINE_USERNAME/PASSWORD, or None when either is unset or
+    still the .env.example placeholder. Shared by every Copernicus caller
+    (this module, marine_data_agent.py, analytics_service.py)."""
+    username = os.getenv("COPERNICUSMARINE_USERNAME", "")
+    password = os.getenv("COPERNICUSMARINE_PASSWORD", "")
+    if _is_unset_or_placeholder(username) or _is_unset_or_placeholder(password):
         return None
-    return username, password
+    return username.strip(), password.strip()
 
 
 def _fetch_sst_grid_sync(min_lon: float, max_lon: float, min_lat: float, max_lat: float, username: str, password: str) -> xr.DataArray:
@@ -171,7 +182,7 @@ async def fetch_environmental_grid(min_lon: float, max_lon: float, min_lat: floa
     or either fetch fails/times out — callers must degrade gracefully per
     region (a later phase), not crash the whole PFZ list over one bad box.
     """
-    creds = _credentials()
+    creds = copernicus_credentials()
     if creds is None:
         return None
     username, password = creds

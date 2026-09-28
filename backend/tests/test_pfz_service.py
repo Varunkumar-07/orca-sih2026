@@ -75,6 +75,21 @@ class TestFetchEnvironmentalGrid:
         result = asyncio.run(pfz.fetch_environmental_grid(79.0, 80.0, 9.0, 10.0))
         assert result is None
 
+    def test_env_example_placeholders_return_none_without_fetching(self, monkeypatch):
+        """An unedited copy of backend/.env.example must not turn into a
+        real Copernicus login attempt with the placeholder values."""
+        monkeypatch.setenv("COPERNICUSMARINE_USERNAME", "your-copernicusmarine-username-here")
+        monkeypatch.setenv("COPERNICUSMARINE_PASSWORD", "your-copernicusmarine-password-here")
+
+        def fail_if_called(*_a, **_k):
+            raise AssertionError("should not fetch with placeholder credentials")
+
+        monkeypatch.setattr(pfz, "_fetch_sst_grid_sync", fail_if_called)
+        monkeypatch.setattr(pfz, "_fetch_chlorophyll_grid_sync", fail_if_called)
+
+        result = asyncio.run(pfz.fetch_environmental_grid(79.0, 80.0, 9.0, 10.0))
+        assert result is None
+
     def test_aligns_different_native_resolutions(self, monkeypatch):
         monkeypatch.setenv("COPERNICUSMARINE_USERNAME", "u")
         monkeypatch.setenv("COPERNICUSMARINE_PASSWORD", "p")
@@ -595,3 +610,31 @@ class TestGetNearestAnchorZonesIsDistant:
         # 1.0 degrees latitude ~= 111km — outside the 75km threshold.
         far_result = asyncio.run(pfz.get_nearest_anchor_zones(anchor.lat + 1.0, anchor.lon))
         assert far_result.is_distant is True
+
+
+class TestCopernicusCredentials:
+    """copernicus_credentials() is the one gate every Copernicus caller
+    (pfz_service, marine_data_agent chlorophyll, analytics_service) goes
+    through — same placeholder rule as the GROQ_API_KEY check."""
+
+    @pytest.mark.parametrize(
+        ("username", "password"),
+        [
+            ("", ""),
+            ("real-user", ""),
+            ("", "real-pass"),
+            ("your-copernicusmarine-username-here", "your-copernicusmarine-password-here"),
+            ("real-user", "your-copernicusmarine-password-here"),
+            ("your_copernicusmarine_username_here", "real-pass"),
+            ("  YOUR-Copernicusmarine-Username-Here  ", "real-pass"),
+        ],
+    )
+    def test_unset_or_placeholder_values_count_as_no_credentials(self, monkeypatch, username, password):
+        monkeypatch.setenv("COPERNICUSMARINE_USERNAME", username)
+        monkeypatch.setenv("COPERNICUSMARINE_PASSWORD", password)
+        assert pfz.copernicus_credentials() is None
+
+    def test_real_values_are_returned_stripped(self, monkeypatch):
+        monkeypatch.setenv("COPERNICUSMARINE_USERNAME", " real-user ")
+        monkeypatch.setenv("COPERNICUSMARINE_PASSWORD", "real-pass\n")
+        assert pfz.copernicus_credentials() == ("real-user", "real-pass")
