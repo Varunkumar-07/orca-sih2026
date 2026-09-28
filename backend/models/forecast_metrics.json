@@ -1,0 +1,86 @@
+{
+  "day1": {
+    "wave_height_m": {
+      "MAE": 0.152,
+      "RMSE": 0.21
+    },
+    "wind_kmh": {
+      "MAE": 2.38,
+      "RMSE": 3.14
+    },
+    "train_rows": 9900,
+    "test_rows": 2475
+  },
+  "day2": {
+    "wave_height_m": {
+      "MAE": 0.182,
+      "RMSE": 0.247
+    },
+    "wind_kmh": {
+      "MAE": 2.84,
+      "RMSE": 3.72
+    },
+    "train_rows": 9892,
+    "test_rows": 2474
+  },
+  "day3": {
+    "wave_height_m": {
+      "MAE": 0.198,
+      "RMSE": 0.268
+    },
+    "wind_kmh": {
+      "MAE": 3.04,
+      "RMSE": 3.98
+    },
+    "train_rows": 9885,
+    "test_rows": 2472
+  },
+  "day4": {
+    "wave_height_m": {
+      "MAE": 0.208,
+      "RMSE": 0.28
+    },
+    "wind_kmh": {
+      "MAE": 3.11,
+      "RMSE": 4.07
+    },
+    "train_rows": 9878,
+    "test_rows": 2470
+  },
+  "day5": {
+    "wave_height_m": {
+      "MAE": 0.215,
+      "RMSE": 0.288
+    },
+    "wind_kmh": {
+      "MAE": 3.18,
+      "RMSE": 4.17
+    },
+    "train_rows": 9871,
+    "test_rows": 2468
+  },
+  "day6": {
+    "wave_height_m": {
+      "MAE": 0.219,
+      "RMSE": 0.294
+    },
+    "wind_kmh": {
+      "MAE": 3.26,
+      "RMSE": 4.26
+    },
+    "train_rows": 9864,
+    "test_rows": 2466
+  },
+  "day7": {
+    "wave_height_m": {
+      "MAE": 0.219,
+      "RMSE": 0.296
+    },
+    "wind_kmh": {
+      "MAE": 3.27,
+      "RMSE": 4.28
+    },
+    "train_rows": 9856,
+    "test_rows": 2465
+  }
+}
