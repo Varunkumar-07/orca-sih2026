@@ -52,6 +52,8 @@ _KOCHI = GeoPoint(lat=9.9312, lon=76.2673)
 
 
 class _FakeResponse:
+    status_code = 200
+
     def __init__(self, json_data: dict):
         self._json = json_data
 

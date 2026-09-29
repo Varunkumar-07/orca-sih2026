@@ -41,13 +41,14 @@ import asyncio
 import logging
 
 import copernicusmarine
-import httpx
 import numpy as np
 
 from backend.agents.deterministic.geospatial import haversine_km
 from backend.agents.reasoning._groq_client import call_groq_json
 from backend.agents.reasoning._trace import record_trace
+from backend.error_utils import describe_exception
 from backend.schemas.contracts import GeoPoint, MarineDataResult, TraceStep
+from backend.services import copernicus_fetch, open_meteo
 from backend.services.pfz_service import (
     SharedGridSources,
     copernicus_credentials,
@@ -59,23 +60,25 @@ from backend.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger("orca.marine_data")
 
-_MARINE_URL = "https://marine-api.open-meteo.com/v1/marine"
-_HTTP_TIMEOUT = 6.0
+_MARINE_URL = open_meteo.MARINE_URL
 # Global, daily, 4km, gap-filled (cloud gaps already interpolated) near-real-
 # time chlorophyll-a product — covers Indian coastal waters, no separate
 # regional product needed. Variable "CHL" is already in mg/m^3, matching
 # MarineDataResult.chlorophyll_mg_m3 with no unit conversion.
 _CHL_DATASET_ID = "cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D"
-# open_dataset() has no timeout parameter of its own — bounded externally
-# via asyncio.wait_for so a slow/broken Copernicus auth server can't stall
-# a request indefinitely. A genuinely successful call was observed live to
-# take ~10s (their auth + lazy Zarr-store open, not just network latency),
-# so this needs real headroom above that, not just above a typical request.
-_CHL_TIMEOUT = 15.0
-# One retry on top of the first attempt — Copernicus's auth server is
-# intermittently flaky (see _fetch_live_chlorophyll below), and a second
-# attempt often succeeds where the first hit a transient auth hiccup.
-_CHL_MAX_ATTEMPTS = 2
+# How long a request waits for a chlorophyll reading. open_dataset() has no
+# timeout of its own and costs ~1s CPU + ~8s of serial network round-trips
+# even on a fast machine; on Render's free tier (0.1 CPU) one read measured
+# ~30s, so the old 15s budget (x2 attempts) timed out on every production
+# request. A read that outlives this keeps running in the background and
+# its result is cached for the next request — see
+# services/copernicus_fetch.py, which also owns the retry policy.
+_CHL_TIMEOUT = 30.0
+# A daily satellite product — re-opening the dataset for the same point on
+# every Weather-page load / chat turn within a few hours is pure waste.
+_CHL_CACHE_TTL_SECONDS = 3 * 60 * 60
+# Cache key resolution (~1km) — finer than the product's own 4km grid.
+_CHL_CACHE_KEY_DECIMALS = 2
 # Despite the "gapfree" name, two real gaps were observed in production for
 # Indian coastal points (e.g. right off Chennai): the newest day is often
 # entirely unpopulated yet (near-real-time publication lag — the dataset's
@@ -160,7 +163,7 @@ async def _live_pfz_candidate_zones(location: GeoPoint) -> list[dict]:
     except Exception as exc:
         logger.warning(
             "Live PFZ lookup failed for chat query (%.4f,%.4f): %s",
-            location.lat, location.lon, exc,
+            location.lat, location.lon, describe_exception(exc, timeout=_LIVE_PFZ_LOOKUP_TIMEOUT),
         )
     return []
 
@@ -174,17 +177,7 @@ async def _fetch_live_sst(location: GeoPoint) -> float | None:
     chlorophyll are still available.
     """
     try:
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-            resp = await client.get(
-                _MARINE_URL,
-                params={
-                    "latitude": location.lat,
-                    "longitude": location.lon,
-                    "current": "sea_surface_temperature",
-                },
-            )
-        resp.raise_for_status()
-        raw = resp.json()["current"].get("sea_surface_temperature")
+        raw = (await open_meteo.fetch_current_marine(location.lat, location.lon)).get("sea_surface_temperature")
         return float(raw) if raw is not None else None
     except Exception:
         return None
@@ -233,35 +226,28 @@ async def _fetch_live_chlorophyll(location: GeoPoint) -> float | None:
     (rather than raising) on missing credentials or any failure —
     chlorophyll is supplementary; a missing reading alone shouldn't fail
     the whole marine lookup when PFZ zones and SST are still available.
+    Failures are logged (with the exception type) by copernicus_fetch.
     """
     creds = copernicus_credentials()
     if creds is None:
         return None
     username, password = creds
-    last_exc: Exception | None = None
-    for attempt in range(1, _CHL_MAX_ATTEMPTS + 1):
-        try:
-            # open_dataset() has no built-in timeout and can hang well past a
-            # normal request budget if Copernicus's auth server is slow/broken
-            # (observed: their prod auth endpoint intermittently misbehaves) —
-            # bound it explicitly so a broken upstream never stalls the whole
-            # marine lookup. The background thread itself isn't killed, just
-            # no longer awaited; it dies on its own once the call eventually
-            # errors or returns.
-            return await asyncio.wait_for(
-                asyncio.to_thread(_fetch_chlorophyll_sync, location, username, password),
-                timeout=_CHL_TIMEOUT,
-            )
-        except Exception as exc:
-            last_exc = exc
-    logger.warning(
-        "Chlorophyll fetch failed for (%.2f,%.2f) after %d attempt(s): %s",
-        location.lat,
-        location.lon,
-        _CHL_MAX_ATTEMPTS,
-        last_exc,
+    key = (
+        "chlorophyll-point",
+        round(location.lat, _CHL_CACHE_KEY_DECIMALS),
+        round(location.lon, _CHL_CACHE_KEY_DECIMALS),
     )
-    return None
+    try:
+        return await copernicus_fetch.fetch(
+            key,
+            _fetch_chlorophyll_sync,
+            (location, username, password),
+            wait_timeout=_CHL_TIMEOUT,
+            ttl=_CHL_CACHE_TTL_SECONDS,
+            label=f"Chlorophyll fetch for ({location.lat:.2f},{location.lon:.2f})",
+        )
+    except Exception:
+        return None
 
 
 async def _classify_intent(query_text: str) -> str:
@@ -415,7 +401,9 @@ async def _live_zones_for_anchor(
                     for i, c in enumerate(candidates)
                 ]
     except Exception as exc:
-        logger.warning("PFZ live detection failed for anchor (%.2f,%.2f): %s", location.lat, location.lon, exc)
+        logger.warning(
+            "PFZ live detection failed for anchor (%.2f,%.2f): %s", location.lat, location.lon, describe_exception(exc)
+        )
     return []
 
 

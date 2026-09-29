@@ -30,100 +30,44 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-import httpx
-
 from backend.agents.reasoning.marine_data_agent import _fetch_live_chlorophyll
 from backend.agents.reasoning.weather_agent import (
     _CYCLONE_WIND_THRESHOLD_KMH,
     _THUNDERSTORM_CODES,
 )
 from backend.schemas.contracts import GeoPoint
+from backend.services import open_meteo
 from backend.services.analytics_service import _compute_astronomical
 from backend.time_utils import now_iso as _now_iso
 
 logger = logging.getLogger("orca.weather_page")
 
-_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
-# The free-tier forecast host has a hard daily request cap ("Daily API
-# request limit exceeded") that this deployment hits in practice. The
-# Historical Forecast API serves the same near-real-time model output
-# (confirmed: matching current temperature/wind and today's daily
-# aggregates) from a separate quota bucket, and accepts identical
-# parameters — a safe drop-in fallback rather than every one of these
-# fields going "unavailable" for the rest of the day once the primary
-# host's quota is exhausted.
-_FORECAST_FALLBACK_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
-_MARINE_URL = "https://marine-api.open-meteo.com/v1/marine"
-_HTTP_TIMEOUT = 6.0
+# Re-exported so tests (and readers) can see which hosts this module hits;
+# the actual request/caching/quota logic lives in services/open_meteo.py.
+_FORECAST_URL = open_meteo.FORECAST_URL
+_FORECAST_FALLBACK_URL = open_meteo.FORECAST_FALLBACK_URL
+_MARINE_URL = open_meteo.MARINE_URL
 # "Today" for sunrise/sunset must be IST's today, not the host server's —
 # a UTC-hosted deployment would otherwise show yesterday's astronomical
 # data for the first ~5.5 hours of every IST day.
 _IST = timezone(timedelta(hours=5, minutes=30))
-# A single transient timeout/rate-limit from Open-Meteo shouldn't blank out
-# an entire field group when a near-immediate second attempt would likely
-# succeed — these calls are cheap (sub-second to a couple seconds), so the
-# extra worst-case latency from one retry is negligible next to the payoff.
-_MAX_ATTEMPTS = 2
-
-
-async def _get_json_with_retry(url: str, params: dict, label: str) -> dict | None:
-    """GET with one retry on a transient failure (timeout, connection
-    error, 5xx) before giving up and logging — previously a single failed
-    request here silently blanked out every field it carried with no
-    visibility into why.
-
-    A 429 is deliberately NOT retried: Open-Meteo's free tier returns it
-    for both short-lived rate-limiting and a hard daily quota ("Daily API
-    request limit exceeded" — observed in practice), and immediately
-    retrying the latter only adds latency for a guaranteed second 429."""
-    last_exc: Exception | None = None
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
-        try:
-            async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-                resp = await client.get(url, params=params)
-            if resp.status_code == 429:
-                logger.warning("%s rate-limited/quota exceeded: %s", label, resp.text[:200])
-                return None
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as exc:
-            last_exc = exc
-    logger.warning("%s fetch failed after %d attempt(s): %s", label, _MAX_ATTEMPTS, last_exc)
-    return None
 
 
 async def _fetch_forecast(lat: float, lon: float) -> dict | None:
-    """Both `current` (instantaneous) and `daily` (today's forecast totals)
-    in one request — `daily.wind_speed_10m_max` is today's forecast peak,
-    a genuinely different number from `current.wind_speed_10m`'s
-    right-now reading, not a duplicate of it."""
-    params = {
-        "latitude": lat,
-        "longitude": lon,
-        "current": "temperature_2m,wind_speed_10m,weather_code",
-        "daily": "precipitation_sum,wind_speed_10m_max",
-        "forecast_days": 1,
-        "wind_speed_unit": "kmh",
-        "timezone": "UTC",
-    }
-    data = await _get_json_with_retry(_FORECAST_URL, params, "Open-Meteo forecast")
-    if data is not None:
-        return data
-    logger.info("Falling back to historical-forecast-api for current weather")
-    return await _get_json_with_retry(_FORECAST_FALLBACK_URL, params, "Open-Meteo historical-forecast fallback")
+    """Current conditions + today's daily totals (see
+    open_meteo.fetch_current_forecast, including its fallback host), or
+    None when neither host could serve it — already logged there."""
+    try:
+        return await open_meteo.fetch_current_forecast(lat, lon)
+    except open_meteo.OpenMeteoError:
+        return None
 
 
 async def _fetch_marine(lat: float, lon: float) -> dict | None:
-    data = await _get_json_with_retry(
-        _MARINE_URL,
-        {
-            "latitude": lat,
-            "longitude": lon,
-            "current": "wave_height,sea_surface_temperature",
-        },
-        "Open-Meteo marine",
-    )
-    return data.get("current") if data else None
+    try:
+        return await open_meteo.fetch_current_marine(lat, lon)
+    except open_meteo.OpenMeteoError:
+        return None
 
 
 async def get_current_weather(lat: float, lon: float) -> dict:

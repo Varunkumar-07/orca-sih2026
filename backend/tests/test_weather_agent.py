@@ -31,11 +31,14 @@ import pytest
 
 from backend.agents.reasoning import weather_agent as wa
 from backend.schemas.contracts import GeoPoint
+from backend.services import open_meteo
 
 _LOCATION = GeoPoint(lat=13.08, lon=80.27)
 
 
 class _FakeResponse:
+    status_code = 200
+
     def __init__(self, json_data: dict):
         self._json = json_data
 
@@ -61,6 +64,9 @@ def _install_fake_get(monkeypatch, *, wind, weather_code, wave):
         raise AssertionError(f"unexpected URL: {url}")
 
     monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    # A freshly installed fake upstream replaces whatever the shared
+    # Open-Meteo client cached from the previous one (same point).
+    open_meteo.reset_state()
 
 
 def _async_return(value):
@@ -176,3 +182,31 @@ def test_intent_classification_failure_does_not_discard_real_weather_data(monkey
     assert result.wind_kmh == 18.5
     assert result.wave_height_m == 1.2
     assert "intent=general" in trace[-1].output_summary
+
+
+def test_open_meteo_429_gives_a_clean_user_facing_error(monkeypatch):
+    """Regression: a 429 used to reach the chat answer verbatim — the full
+    Open-Meteo request URL plus httpx's MDN docs link. The user-facing
+    error_message must be the clean one; the detail stays in the log."""
+    monkeypatch.setattr(wa, "_classify_intent", _async_return("general"))
+
+    class _Resp429:
+        status_code = 429
+        text = '{"error":true,"reason":"Daily API request limit exceeded. Please try again tomorrow."}'
+
+        def raise_for_status(self):
+            raise AssertionError("429 must be handled before raise_for_status")
+
+    async def fake_get(self, url, params=None, headers=None):
+        return _Resp429()
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    trace = []
+    result = asyncio.run(wa.run_weather_agent("is it windy?", _LOCATION, trace))
+
+    assert result.status == "error"
+    assert result.error_message == open_meteo._QUOTA_USER_MESSAGE
+    for leaked in ("http", "open-meteo.com", "mozilla", "429"):
+        assert leaked not in result.error_message.lower()
+        assert leaked not in trace[-1].output_summary.lower()

@@ -88,3 +88,20 @@ def offline_pfz_data():
         mp.setattr(marine_data_agent, "fetch_environmental_grid", fake_fetch)
         yield
     _reset_zones_cache()
+
+
+@pytest.fixture(autouse=True)
+def _reset_upstream_client_state(monkeypatch):
+    """The shared Open-Meteo client and Copernicus fetch runner keep
+    process-wide caches and quota blocks (see backend/services/open_meteo.py
+    and copernicus_fetch.py) — reset them around every test so one test's
+    cached reading or simulated 429 can't leak into the next. Retry backoff
+    is zeroed so retry-path tests don't sleep."""
+    from backend.services import copernicus_fetch, open_meteo
+
+    open_meteo.reset_state()
+    copernicus_fetch.reset_state()
+    monkeypatch.setattr(open_meteo, "_BACKOFF_BASE_SECONDS", 0)
+    yield
+    open_meteo.reset_state()
+    copernicus_fetch.reset_state()

@@ -320,3 +320,64 @@ def test_build_export_notes_fallback_when_fully_clean():
     series = {"wind_kmh": {"status": "ok", "dates": ["2026-01-01"], "values": [10.0], "unit": "km/h"}}
     notes = svc.build_export_notes(series)
     assert notes == ["All variables are sourced directly from their upstream APIs with full coverage for this range."]
+
+
+def test_result_with_a_failed_source_is_not_cached(monkeypatch):
+    """Regression: one transient upstream failure used to be cached
+    permanently for that (point, range, variables) key."""
+    outcomes = iter([RuntimeError("upstream down"), {"time": ["2026-01-01"], "sea_surface_temperature_max": [28.0]}])
+
+    async def flaky_marine_daily(lat, lon, start_date, end_date):
+        item = next(outcomes)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    monkeypatch.setattr(svc, "_fetch_marine_daily", flaky_marine_daily)
+
+    args = (5.0, 6.0, "2026-01-01", "2026-01-01", ["sst_celsius"])
+    first = asyncio.run(svc.get_historical_analytics(*args))
+    second = asyncio.run(svc.get_historical_analytics(*args))
+
+    assert first["series"]["sst_celsius"]["status"] == "error"
+    assert second["series"]["sst_celsius"]["status"] == "ok"
+
+
+def test_copernicus_timeout_degrades_to_error_and_is_not_cached(monkeypatch):
+    monkeypatch.setenv("COPERNICUSMARINE_USERNAME", "u")
+    monkeypatch.setenv("COPERNICUSMARINE_PASSWORD", "p")
+    monkeypatch.setattr(svc, "_COPERNICUS_TIMEOUT", 0.05)
+
+    def slow_sync(*_a):
+        import time
+
+        time.sleep(0.3)
+        return ["2026-01-01"], [33.1]
+
+    monkeypatch.setattr(svc, "_fetch_copernicus_series_sync", slow_sync)
+
+    result = asyncio.run(svc.get_historical_analytics(1.0, 2.0, "2026-01-01", "2026-01-01", ["salinity_psu"]))
+
+    assert result["series"]["salinity_psu"]["status"] == "error"
+    assert svc._cache == {}
+
+
+def test_copernicus_series_drops_days_outside_the_requested_range(monkeypatch):
+    """Copernicus's "nearest" time selection snapped a ...T23:59:59 range
+    end onto the next day's timestamp (observed live for salinity)."""
+    import copernicusmarine
+    import numpy as np
+    import pandas as pd
+    import xarray as xr
+
+    times = pd.to_datetime(["2026-01-01", "2026-01-02", "2026-01-03"])
+    ds = xr.Dataset(
+        {"so": (("time", "depth", "latitude", "longitude"), np.array([33.0, 33.1, 33.2]).reshape(3, 1, 1, 1))},
+        coords={"time": times, "depth": [0.5], "latitude": [1.0], "longitude": [2.0]},
+    )
+    monkeypatch.setattr(copernicusmarine, "open_dataset", lambda **_k: ds)
+
+    dates, values = svc._fetch_copernicus_series_sync("ds", "so", 1.0, 2.0, "2026-01-01", "2026-01-02", "u", "p")
+
+    assert dates == ["2026-01-01", "2026-01-02"]
+    assert values == [33.0, 33.1]

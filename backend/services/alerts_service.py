@@ -50,15 +50,7 @@ _cache_at: float = 0.0
 _cache_key: tuple[str, ...] | None = None
 
 
-async def _check_zone(zone: dict) -> list[dict]:
-    coords = zone.get("coordinates")
-    if not coords:
-        return []
-
-    forecast = await _fetch_forecast(coords["lat"], coords["lon"])
-    if forecast is None:
-        return []
-
+def _alerts_for(zone: dict, forecast: dict) -> list[dict]:
     current = forecast.get("current") or {}
     wind_kmh = current.get("wind_speed_10m")
     weather_code = current.get("weather_code")
@@ -89,25 +81,50 @@ async def _check_zone(zone: dict) -> list[dict]:
     return found
 
 
+async def _check_zone(zone: dict) -> list[dict]:
+    coords = zone.get("coordinates")
+    if not coords:
+        return []
+    forecast = await _fetch_forecast(coords["lat"], coords["lon"])
+    if forecast is None:
+        return []
+    return _alerts_for(zone, forecast)
+
+
 async def get_active_alerts(pfz_zones: list[dict]) -> dict:
     """Active cyclone/lightning alerts across `pfz_zones` (pass GET /zones's
-    own "pfz" entries). Never raises — a zone whose forecast fetch fails is
-    silently skipped rather than surfaced as an error, same degrade-only
-    convention every live-fetch path in this codebase already follows."""
+    own "pfz" entries). Never raises. A zone whose forecast fetch fails
+    contributes no alerts but is counted in `unavailable_zones` — without
+    that count, a sweep where every fetch failed (e.g. Open-Meteo's daily
+    quota exhausted) was indistinguishable from "all zones calm", and the
+    page said exactly that. Forecast fetches go through the shared
+    Open-Meteo client (services/open_meteo.py), which caps concurrency —
+    firing all ~30 at once used to trip "Too many concurrent requests".
+    A result with unavailable zones isn't cached, so the next request
+    retries them (successful per-point forecasts are still cached there)."""
     global _cache, _cache_at, _cache_key
     now = time.monotonic()
     key = tuple(sorted(z["id"] for z in pfz_zones))
     if _cache is not None and _cache_key == key and (now - _cache_at) < _CACHE_TTL_SECONDS:
         return _cache
 
-    per_zone_results = await asyncio.gather(*(_check_zone(z) for z in pfz_zones))
-    alerts: list[dict] = [alert for zone_alerts in per_zone_results for alert in zone_alerts]
+    checkable = [z for z in pfz_zones if z.get("coordinates")]
+    forecasts = await asyncio.gather(
+        *(_fetch_forecast(z["coordinates"]["lat"], z["coordinates"]["lon"]) for z in checkable)
+    )
+    alerts: list[dict] = [
+        alert for zone, forecast in zip(checkable, forecasts) if forecast is not None for alert in _alerts_for(zone, forecast)
+    ]
+    unavailable_zones = sum(1 for f in forecasts if f is None)
 
-    _cache = {
+    result = {
         "alerts": alerts,
         "checked_zones": len(pfz_zones),
+        "unavailable_zones": unavailable_zones,
         "generated_at": _now_iso(),
     }
-    _cache_at = now
-    _cache_key = key
-    return _cache
+    if unavailable_zones == 0:
+        _cache = result
+        _cache_at = now
+        _cache_key = key
+    return result

@@ -48,6 +48,7 @@ from backend.agents.deterministic.geospatial import (
     get_active_restricted_areas,
     haversine_km,
 )
+from backend.error_utils import describe_exception
 
 logger = logging.getLogger("orca.pfz")
 
@@ -265,7 +266,10 @@ class SharedGridSources:
                 )
             except Exception as exc:
                 last_exc = exc
-        logger.warning("PFZ shared dataset open failed (%s), falling back to per-anchor opens: %s", opener.__name__, last_exc)
+        logger.warning(
+            "PFZ shared dataset open failed (%s), falling back to per-anchor opens: %s",
+            opener.__name__, describe_exception(last_exc, timeout=_GRID_FETCH_TIMEOUT),
+        )
         return None
 
 
@@ -308,7 +312,8 @@ async def fetch_environmental_grid(
     if sst_da is None or chl_da is None:
         logger.warning(
             "PFZ grid fetch failed for box (%.2f,%.2f)-(%.2f,%.2f) after %d attempt(s): %s",
-            min_lon, min_lat, max_lon, max_lat, _GRID_FETCH_MAX_ATTEMPTS, last_exc,
+            min_lon, min_lat, max_lon, max_lat, _GRID_FETCH_MAX_ATTEMPTS,
+            describe_exception(last_exc, timeout=_GRID_FETCH_TIMEOUT),
         )
         return None
 

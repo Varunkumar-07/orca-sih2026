@@ -12,17 +12,19 @@ any failure (network, parsing, missing data) degrades to status="error".
 """
 
 import asyncio
-
-import httpx
+import logging
 
 from backend.agents.reasoning._groq_client import call_groq_json
 from backend.agents.reasoning._trace import record_trace
+from backend.error_utils import describe_exception
 from backend.schemas.contracts import GeoPoint, TraceStep, WeatherDataResult
+from backend.services import open_meteo
 from backend.time_utils import now_iso as _now_iso
 
-_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
-_MARINE_URL = "https://marine-api.open-meteo.com/v1/marine"
-_HTTP_TIMEOUT = 6.0
+logger = logging.getLogger("orca.weather_agent")
+
+_FORECAST_URL = open_meteo.FORECAST_URL
+_MARINE_URL = open_meteo.MARINE_URL
 # IMD classifies a "Cyclonic Storm" at sustained wind >= 62 km/h.
 _CYCLONE_WIND_THRESHOLD_KMH = 62.0
 # WMO weather codes (used by Open-Meteo) for thunderstorm conditions.
@@ -43,39 +45,19 @@ text, in the form:
 including broad "is it safe to go out" style queries."""
 
 
-
-
 async def _fetch_live_weather(location: GeoPoint) -> dict:
     """Live wind/wave/thunderstorm snapshot for the query location, via
-    Open-Meteo's free, keyless forecast and marine APIs. Raises on any
-    network/parsing failure — the caller turns that into status="error"
-    rather than ever substituting a fabricated number.
+    Open-Meteo's free, keyless forecast and marine APIs — through the
+    shared cached/rate-limited client (services/open_meteo.py), so a chat
+    turn and a Weather-page load for the same point share one upstream
+    call. Raises on any network/parsing failure — the caller turns that
+    into status="error" rather than ever substituting a fabricated number.
     """
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-        forecast_resp, marine_resp = await asyncio.gather(
-            client.get(
-                _FORECAST_URL,
-                params={
-                    "latitude": location.lat,
-                    "longitude": location.lon,
-                    "current": "wind_speed_10m,weather_code",
-                    "wind_speed_unit": "kmh",
-                },
-            ),
-            client.get(
-                _MARINE_URL,
-                params={
-                    "latitude": location.lat,
-                    "longitude": location.lon,
-                    "current": "wave_height",
-                },
-            ),
-        )
-    forecast_resp.raise_for_status()
-    marine_resp.raise_for_status()
-
-    forecast_current = forecast_resp.json()["current"]
-    marine_current = marine_resp.json()["current"]
+    forecast, marine_current = await asyncio.gather(
+        open_meteo.fetch_current_forecast(location.lat, location.lon),
+        open_meteo.fetch_current_marine(location.lat, location.lon),
+    )
+    forecast_current = forecast["current"]
 
     wind_raw = forecast_current["wind_speed_10m"]
     if wind_raw is None:
@@ -98,6 +80,18 @@ async def _fetch_live_weather(location: GeoPoint) -> dict:
         # rather than faked (reporting.py already skips a falsy tide_info).
         "tide_info": None,
     }
+
+
+def _user_facing_error(exc: Exception) -> str:
+    if isinstance(exc, open_meteo.OpenMeteoError):
+        return exc.user_message
+    if type(exc) is ValueError:
+        # Our own hand-written messages (e.g. "query_location is required
+        # for a weather lookup", "Open-Meteo returned no wind reading ...")
+        # — exact type only, so subclasses like pydantic's ValidationError
+        # or JSONDecodeError never leak through here.
+        return str(exc)
+    return "live weather data could not be retrieved — please try again shortly"
 
 
 async def _classify_intent(query_text: str) -> str:
@@ -154,6 +148,12 @@ async def run_weather_agent(
         )
 
     except Exception as exc:  # noqa: BLE001 - must never raise across the boundary
+        # error_message flows straight into the user-facing chat answer
+        # (reporting.py) — it must never carry a raw upstream exception
+        # (previously a full Open-Meteo 429 URL plus an MDN docs link).
+        # The real detail goes to the log; the trace (shown in the UI's
+        # reasoning panel) gets the exception type only.
+        logger.warning("Weather lookup failed for %s: %s", query_location, describe_exception(exc))
         result = WeatherDataResult(
             status="error",
             wind_kmh=None,
@@ -162,9 +162,9 @@ async def run_weather_agent(
             lightning_alert=False,
             tide_info=None,
             source_timestamp=_now_iso(),
-            error_message=str(exc),
+            error_message=_user_facing_error(exc),
         )
-        output_summary = f"error: {exc}"
+        output_summary = f"error: {type(exc).__name__}"
 
     record_trace(trace, "weather_agent", input_summary, output_summary)
     return result

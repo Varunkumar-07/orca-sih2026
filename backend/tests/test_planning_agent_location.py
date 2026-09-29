@@ -31,6 +31,8 @@ from backend.agents.reasoning import planning_agent as pa
 
 
 class _FakeResponse:
+    status_code = 200
+
     def __init__(self, json_data):
         self._json = json_data
 

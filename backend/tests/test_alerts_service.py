@@ -168,3 +168,36 @@ def test_cache_miss_after_ttl_expires_recomputes(monkeypatch):
     asyncio.run(svc.get_active_alerts(zones))
 
     assert call_count["n"] == 2
+
+
+def test_failed_forecasts_are_counted_not_reported_as_calm(monkeypatch):
+    """Regression: with every forecast fetch failing (e.g. Open-Meteo's
+    daily quota gone) the response was identical to "all zones calm"."""
+    ok_zone = _pfz_zone(zone_id="OK-001", lat=1.0, lon=1.0)
+    failed_zone = _pfz_zone(zone_id="FAILED-001", lat=2.0, lon=2.0)
+
+    async def fake_fetch(lat, lon):
+        return None if lat == 2.0 else _forecast(wind_kmh=5.0)
+
+    monkeypatch.setattr(svc, "_fetch_forecast", fake_fetch)
+
+    result = asyncio.run(svc.get_active_alerts([ok_zone, failed_zone]))
+
+    assert result["checked_zones"] == 2
+    assert result["unavailable_zones"] == 1
+    assert result["alerts"] == []
+
+
+def test_result_with_unavailable_zones_is_not_cached(monkeypatch):
+    call_count = {"n": 0}
+
+    async def failing_fetch(lat, lon):
+        call_count["n"] += 1
+
+    monkeypatch.setattr(svc, "_fetch_forecast", failing_fetch)  # returns None: fetch failed
+
+    zones = [_pfz_zone()]
+    asyncio.run(svc.get_active_alerts(zones))
+    asyncio.run(svc.get_active_alerts(zones))
+
+    assert call_count["n"] == 2  # retried, not frozen for the TTL

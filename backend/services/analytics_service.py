@@ -74,26 +74,36 @@ that one too. Both sets are exposed here as the single source of truth so
 Analytics and Download can't disagree on which variables get charted.
 
 Historical data for a past date range never changes once elapsed, so
-results are cached permanently in-process per (lat, lon, start_date,
-end_date, variables) — same as before this expansion.
+complete results are cached permanently in-process per (lat, lon,
+start_date, end_date, variables). A result with a failed source is not
+cached, so the next request retries it (see get_historical_analytics).
 """
 
 import asyncio
+import logging
 import math
 from datetime import date, timedelta
 from typing import Any
 
-import httpx
-
+from backend.error_utils import describe_exception
+from backend.services import copernicus_fetch, open_meteo
 from backend.services.pfz_service import copernicus_credentials
 
-_MARINE_URL = "https://marine-api.open-meteo.com/v1/marine"
-_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
-_HTTP_TIMEOUT = 10.0
-# Copernicus range queries move a bit more data than marine_data_agent.py's
-# single-latest-day reads; same "bound a hanging auth/open call" reasoning
-# as that module, just a slightly larger budget.
-_COPERNICUS_TIMEOUT = 20.0
+logger = logging.getLogger("orca.analytics")
+
+_MARINE_URL = open_meteo.MARINE_URL
+_ARCHIVE_URL = open_meteo.ARCHIVE_URL
+# Past-date archive data doesn't change; this only bounds how long the
+# shared Open-Meteo client (services/open_meteo.py) keeps a raw response.
+_OPEN_METEO_TTL_SECONDS = 60 * 60
+# How long a request waits for one Copernicus series. Each is its own
+# open_dataset() (~1s CPU + ~8s of network round-trips on a fast machine,
+# ~30s measured at Render free tier's 0.1 CPU) — the old 20s budget timed
+# out every production request. A read that outlives this keeps running
+# and its result is cached for the next request (see
+# services/copernicus_fetch.py).
+_COPERNICUS_TIMEOUT = 45.0
+_COPERNICUS_CACHE_TTL_SECONDS = 6 * 60 * 60
 
 # Same dataset marine_data_agent.py already uses for the chat/weather path.
 _CHL_DATASET_ID = "cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D"
@@ -266,10 +276,18 @@ async def _empty_dict() -> dict:
     return {}
 
 
-async def _safe(coro) -> dict:
+async def _tracked(source: str, coro, failed_sources: list[str]) -> dict:
+    """Degrade one failed source to {} (its variables get status "error")
+    and record it, so a response with a failed source is never cached
+    permanently — previously one transient upstream failure was frozen
+    into the in-process cache for the rest of the process's life."""
     try:
         return await coro
-    except Exception:
+    except Exception as exc:
+        failed_sources.append(source)
+        # open_meteo / copernicus_fetch already log their own failures.
+        if not isinstance(exc, (open_meteo.OpenMeteoError, TimeoutError)):
+            logger.warning("Analytics %s fetch failed: %s", source, describe_exception(exc))
         return {}
 
 
@@ -289,41 +307,41 @@ def _status_for(values: list) -> str:
 # ---------------------------------------------------------------------------
 
 async def _fetch_marine_daily(lat: float, lon: float, start_date: str, end_date: str) -> dict:
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-        resp = await client.get(
-            _MARINE_URL,
-            params={
-                "latitude": lat,
-                "longitude": lon,
-                "daily": (
-                    "sea_surface_temperature_max,wave_height_max,wave_direction_dominant,"
-                    "wave_period_max,swell_wave_height_max,swell_wave_direction_dominant,"
-                    "swell_wave_period_max"
-                ),
-                "start_date": start_date,
-                "end_date": end_date,
-                "timezone": "UTC",
-            },
-        )
-    resp.raise_for_status()
-    return resp.json().get("daily", {})
+    data = await open_meteo.get_json(
+        _MARINE_URL,
+        {
+            "latitude": lat,
+            "longitude": lon,
+            "daily": (
+                "sea_surface_temperature_max,wave_height_max,wave_direction_dominant,"
+                "wave_period_max,swell_wave_height_max,swell_wave_direction_dominant,"
+                "swell_wave_period_max"
+            ),
+            "start_date": start_date,
+            "end_date": end_date,
+            "timezone": "UTC",
+        },
+        label="Open-Meteo marine daily",
+        ttl=_OPEN_METEO_TTL_SECONDS,
+    )
+    return data.get("daily", {})
 
 
 async def _fetch_marine_current_hourly(lat: float, lon: float, start_date: str, end_date: str) -> dict:
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-        resp = await client.get(
-            _MARINE_URL,
-            params={
-                "latitude": lat,
-                "longitude": lon,
-                "hourly": "ocean_current_velocity,ocean_current_direction",
-                "start_date": start_date,
-                "end_date": end_date,
-                "timezone": "UTC",
-            },
-        )
-    resp.raise_for_status()
-    return resp.json().get("hourly", {})
+    data = await open_meteo.get_json(
+        _MARINE_URL,
+        {
+            "latitude": lat,
+            "longitude": lon,
+            "hourly": "ocean_current_velocity,ocean_current_direction",
+            "start_date": start_date,
+            "end_date": end_date,
+            "timezone": "UTC",
+        },
+        label="Open-Meteo marine hourly currents",
+        ttl=_OPEN_METEO_TTL_SECONDS,
+    )
+    return data.get("hourly", {})
 
 
 def _aggregate_current_daily(hourly: dict) -> tuple[list[str], list[float], list[float]]:
@@ -351,24 +369,24 @@ def _aggregate_current_daily(hourly: dict) -> tuple[list[str], list[float], list
 # ---------------------------------------------------------------------------
 
 async def _fetch_archive_daily(lat: float, lon: float, start_date: str, end_date: str) -> dict:
-    async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-        resp = await client.get(
-            _ARCHIVE_URL,
-            params={
-                "latitude": lat,
-                "longitude": lon,
-                "daily": (
-                    "temperature_2m_mean,wind_speed_10m_max,wind_direction_10m_dominant,"
-                    "wind_gusts_10m_max,precipitation_sum,cloud_cover_mean,"
-                    "pressure_msl_mean,relative_humidity_2m_mean"
-                ),
-                "start_date": start_date,
-                "end_date": end_date,
-                "timezone": "UTC",
-            },
-        )
-    resp.raise_for_status()
-    return resp.json().get("daily", {})
+    data = await open_meteo.get_json(
+        _ARCHIVE_URL,
+        {
+            "latitude": lat,
+            "longitude": lon,
+            "daily": (
+                "temperature_2m_mean,wind_speed_10m_max,wind_direction_10m_dominant,"
+                "wind_gusts_10m_max,precipitation_sum,cloud_cover_mean,"
+                "pressure_msl_mean,relative_humidity_2m_mean"
+            ),
+            "start_date": start_date,
+            "end_date": end_date,
+            "timezone": "UTC",
+        },
+        label="Open-Meteo weather archive",
+        ttl=_OPEN_METEO_TTL_SECONDS,
+    )
+    return data.get("daily", {})
 
 
 # ---------------------------------------------------------------------------
@@ -398,28 +416,36 @@ def _fetch_copernicus_series_sync(
         # Shallowest available level — sea-surface reading (see
         # VARIABLE_CAVEATS for salinity_psu).
         da = da.isel(depth=0)
-    dates = [str(t)[:10] for t in da["time"].values]
-    values = [None if math.isnan(v) else round(float(v), 3) for v in da.values]
-    return dates, values
+    # "nearest" time selection can snap the range end onto the next day's
+    # timestamp (observed: salinity returned end_date + 1 for a
+    # ...T23:59:59 end), so keep only days actually inside the request.
+    pairs = [
+        (str(t)[:10], None if math.isnan(v) else round(float(v), 3))
+        for t, v in zip(da["time"].values, da.values)
+    ]
+    pairs = [(d, v) for d, v in pairs if start_date <= d <= end_date]
+    return [d for d, _ in pairs], [v for _, v in pairs]
 
 
 async def _fetch_copernicus_series(dataset_id: str, variable: str, lat: float, lon: float, start_date: str, end_date: str) -> dict:
-    """Same graceful-degradation contract as marine_data_agent's
-    _fetch_live_chlorophyll: missing credentials, a slow/broken Copernicus
-    call, or a timeout all degrade to an empty series rather than raising
-    — the caller turns that into this variable's own "error" status."""
+    """Missing credentials degrade to an empty series (the caller turns
+    that into this variable's own "error" status). A failed or timed-out
+    read raises, so get_historical_analytics knows not to cache it; the
+    failure itself is logged, with its exception type, by
+    copernicus_fetch."""
     creds = copernicus_credentials()
     if creds is None:
         return {"dates": [], "values": []}
     username, password = creds
-    try:
-        dates, values = await asyncio.wait_for(
-            asyncio.to_thread(_fetch_copernicus_series_sync, dataset_id, variable, lat, lon, start_date, end_date, username, password),
-            timeout=_COPERNICUS_TIMEOUT,
-        )
-        return {"dates": dates, "values": values}
-    except Exception:
-        return {"dates": [], "values": []}
+    dates, values = await copernicus_fetch.fetch(
+        ("series", dataset_id, variable, round(lat, 4), round(lon, 4), start_date, end_date),
+        _fetch_copernicus_series_sync,
+        (dataset_id, variable, lat, lon, start_date, end_date, username, password),
+        wait_timeout=_COPERNICUS_TIMEOUT,
+        ttl=_COPERNICUS_CACHE_TTL_SECONDS,
+        label=f"Copernicus {variable} series ({dataset_id}) for ({lat:.2f},{lon:.2f}) {start_date}..{end_date}",
+    )
+    return {"dates": dates, "values": values}
 
 
 # ---------------------------------------------------------------------------
@@ -544,13 +570,14 @@ async def get_historical_analytics(
     want_oxygen = "dissolved_oxygen_mmol_m3" in var_set
     want_astronomical = bool({"sunrise_hour_ist", "sunset_hour_ist", "moon_phase"} & var_set)
 
+    failed: list[str] = []
     marine_daily, current_hourly, archive_daily, chl, salinity, oxygen = await asyncio.gather(
-        _safe(_fetch_marine_daily(lat, lon, start_date, end_date)) if want_marine_daily else _empty_dict(),
-        _safe(_fetch_marine_current_hourly(lat, lon, start_date, end_date)) if want_current else _empty_dict(),
-        _safe(_fetch_archive_daily(lat, lon, start_date, end_date)) if want_archive else _empty_dict(),
-        _fetch_copernicus_series(_CHL_DATASET_ID, "CHL", lat, lon, start_date, end_date) if want_chl else _empty_dict(),
-        _fetch_copernicus_series(_SALINITY_DATASET_ID, "so", lat, lon, start_date, end_date) if want_salinity else _empty_dict(),
-        _fetch_copernicus_series(_OXYGEN_DATASET_ID, "o2", lat, lon, start_date, end_date) if want_oxygen else _empty_dict(),
+        _tracked("marine daily", _fetch_marine_daily(lat, lon, start_date, end_date), failed) if want_marine_daily else _empty_dict(),
+        _tracked("marine currents", _fetch_marine_current_hourly(lat, lon, start_date, end_date), failed) if want_current else _empty_dict(),
+        _tracked("weather archive", _fetch_archive_daily(lat, lon, start_date, end_date), failed) if want_archive else _empty_dict(),
+        _tracked("chlorophyll", _fetch_copernicus_series(_CHL_DATASET_ID, "CHL", lat, lon, start_date, end_date), failed) if want_chl else _empty_dict(),
+        _tracked("salinity", _fetch_copernicus_series(_SALINITY_DATASET_ID, "so", lat, lon, start_date, end_date), failed) if want_salinity else _empty_dict(),
+        _tracked("dissolved oxygen", _fetch_copernicus_series(_OXYGEN_DATASET_ID, "o2", lat, lon, start_date, end_date), failed) if want_oxygen else _empty_dict(),
     )
     astronomical = _compute_astronomical(lat, lon, start_date, end_date, var_set) if want_astronomical else {}
 
@@ -627,7 +654,13 @@ async def get_historical_analytics(
         "end_date": end_date,
         "series": series,
     }
-    _cache[cache_key] = result
+    # Only a complete answer is cached for good — a response with a failed
+    # source is returned as-is (those variables show "error") and the next
+    # request retries the failed sources. The per-source caches in
+    # open_meteo / copernicus_fetch keep that retry from re-fetching the
+    # sources that did succeed.
+    if not failed:
+        _cache[cache_key] = result
     return result
 
 
