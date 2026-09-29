@@ -139,7 +139,7 @@ export function RoutePlannerPage() {
           Route Planner
         </h1>
         <p className="mt-2.5 text-sm leading-relaxed text-[#0d0c0b]/64 max-w-[52ch] mx-auto">
-          Plan a safe route between two points that avoids restricted waters.
+          Plan a sea route to a fishing zone that avoids land and protected areas.
         </p>
       </div>
 
@@ -147,7 +147,7 @@ export function RoutePlannerPage() {
         {/* Map — glass card matching the Assistant/Zones pages' panels */}
         <div className="flex-1 min-w-0 min-h-[320px] lg:min-h-0 rounded-[20px] bg-white/15 backdrop-blur-[18px] border border-white/40 shadow-lg flex flex-col overflow-hidden">
           <div className="px-4 py-2 border-b border-white/40 bg-white/15 flex items-center justify-between shrink-0">
-            <h2 className="text-xs font-semibold tracking-widest uppercase text-slate-600">Route Planner · Hazard-Avoiding A*</h2>
+            <h2 className="text-xs font-semibold tracking-widest uppercase text-slate-600">Route Planner · Sea Route A*</h2>
             <span className="text-[11px] text-slate-500">{restrictedZones.length} restricted areas avoided</span>
           </div>
           <div className="flex-1 min-h-[300px]">
@@ -232,6 +232,16 @@ export function RoutePlannerPage() {
                     <div>
                       <span className="font-medium text-slate-500">Waypoints:</span> {result.waypoint_count}
                     </div>
+                    {Boolean(result.start_offset_km) && (
+                      <div className="text-slate-500">
+                        Your start is on land — the sea route begins at the nearest open water, {result.start_offset_km} km away.
+                      </div>
+                    )}
+                    {Boolean(result.end_offset_km) && (
+                      <div className="text-slate-500">
+                        The route ends at the nearest reachable open water, {result.end_offset_km} km from the zone.
+                      </div>
+                    )}
                   </div>
                 </>
               ) : (

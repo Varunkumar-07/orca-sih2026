@@ -24,7 +24,7 @@ const PANELS: { eyebrow: string; heading: string; sub: string; ctaLabel: string;
   {
     eyebrow: 'Route Planner · Alerts & Advisories · Analytics Dashboard',
     heading: 'Plan safe routes.',
-    sub: 'Plan a safe route between two points that avoids restricted waters.',
+    sub: 'Plan a sea route to a fishing zone that avoids land and protected areas.',
     ctaLabel: 'Plan a route',
     ctaTo: '/route',
   },

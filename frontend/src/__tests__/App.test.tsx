@@ -49,7 +49,7 @@ describe('App routing — every route resolves to its real page', () => {
     ['/chat', 'ORCA Chat'],
     ['/zones', 'Zones Explorer · PFZ & Restricted Areas'],
     ['/weather', 'Weather', 1], // level 1: the WeatherStatsCard also defaults its own <h3> title to "Weather" before a zone is picked
-    ['/route', 'Route Planner · Hazard-Avoiding A*'],
+    ['/route', 'Route Planner · Sea Route A*'],
     ['/alerts', 'Alerts & Advisories'],
     ['/analytics', 'Analytics Dashboard'],
     ['/download', 'Download'],

@@ -88,6 +88,24 @@ describe('RoutePlannerPage — planning a route', () => {
     )
   })
 
+  it('says when a start on land was moved to the nearest open water', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+      const url = String(input)
+      if (url.startsWith('/api/zones')) return jsonResponse({ zones: ZONES })
+      return jsonResponse(routeResponse({ start_offset_km: 3.53, end_offset_km: 0 }))
+    }))
+    const user = userEvent.setup()
+    render(<RoutePlannerPage />)
+    await waitForZonesLoaded()
+
+    await user.selectOptions(screen.getByRole('combobox'), 'KOCHI-PFZ-001')
+    await user.click(screen.getByRole('button', { name: /Plan Route/ }))
+
+    await waitFor(() => expect(screen.getByText('Route found')).toBeInTheDocument())
+    expect(screen.getByText(/sea route begins at the nearest open water, 3.53 km away/)).toBeInTheDocument()
+    expect(screen.queryByText(/route ends at the nearest reachable open water/)).not.toBeInTheDocument()
+  })
+
   it('shows the "no route found" reason when the backend reports none', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string) => {
       const url = String(input)

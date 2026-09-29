@@ -122,6 +122,10 @@ export interface RouteResponse {
   route: { lat: number; lon: number }[] | null;
   distance_km: number | null;
   waypoint_count: number;
+  // How far a start/destination on land was moved to reach open water
+  // (the route begins/ends there); 0 when already at sea.
+  start_offset_km?: number | null;
+  end_offset_km?: number | null;
   reason: string | null;
 }
 

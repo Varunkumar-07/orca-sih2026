@@ -92,6 +92,15 @@ describe('ChatPanel — message rendering', () => {
     expect(screen.getByText('12 km/h')).toBeInTheDocument()
   })
 
+  it('renders a translated answer as the same verdict card (icon kept on the headline)', () => {
+    const text = 'प्रश्नः क्या कल चेन्नई के पास बाहर जाना सुरक्षित है?\nस्थानः 13.0827, 80.2707\n✅ जाने के लिए सुरक्षित (आत्मविश्वास 95 प्रतिशत)\nमौसमः हवा 3.1 किमी/घंटा'
+    render(<ChatPanel {...baseProps({ messages: [{ role: 'orca', text }] })} />)
+
+    const headline = screen.getByText(/जाने के लिए सुरक्षित/)
+    expect(headline).toHaveClass('text-emerald-700')
+    expect(screen.getByText('मौसमः हवा 3.1 किमी/घंटा').tagName).toBe('LI')
+  })
+
   it('falls back to raw text (no structure) for a short ORCA answer under 3 lines', () => {
     render(<ChatPanel {...baseProps({ messages: [{ role: 'orca', text: 'just one short line' }] })} />)
     expect(screen.getByText('just one short line')).toBeInTheDocument()
