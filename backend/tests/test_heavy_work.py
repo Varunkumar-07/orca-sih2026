@@ -16,6 +16,8 @@ Covers:
   - exclusive(max_threads=N) never has more than N threads running, and
     a thread whose caller timed out keeps its seat (retries can't pile a
     new read on top of a still-running one)
+  - run_in_thread's timeout starts when the read starts (queueing for a
+    seat doesn't count), and a timed-out read keeps its seat
   - exclusive() is re-entrant (no self-deadlock)
   - a wedged thread is abandoned after _ABANDON_AFTER_SECONDS
   - memory is released (gc + malloc_trim hook) whenever a slot is freed,
@@ -138,6 +140,42 @@ def test_thread_cap_counts_reads_whose_caller_timed_out():
 
     asyncio.run(run())
     assert conc.peak == 2
+
+
+def test_timeout_starts_when_the_read_starts_not_while_queued():
+    release = threading.Event()
+
+    async def run():
+        async with heavy_work.exclusive("PFZ zone refresh", max_threads=1):
+            first = asyncio.create_task(heavy_work.run_in_thread(release.wait, 5))
+            await asyncio.sleep(0)
+            second = asyncio.create_task(heavy_work.run_in_thread(lambda: "ran", timeout=0.2))
+            await asyncio.sleep(0.4)  # queued for longer than its own timeout
+            release.set()
+            await first
+            return await second
+
+    assert asyncio.run(run()) == "ran"
+
+
+def test_timeout_raises_and_the_thread_keeps_its_seat():
+    conc = _Concurrency()
+    release = threading.Event()
+    slow_read = conc.track(lambda: release.wait(5))
+    next_read = conc.track(lambda: None)
+
+    async def run():
+        async with heavy_work.exclusive("PFZ zone refresh", max_threads=1):
+            with pytest.raises(TimeoutError):
+                await heavy_work.run_in_thread(slow_read, timeout=0.05)
+            queued = asyncio.create_task(heavy_work.run_in_thread(next_read))
+            await asyncio.sleep(0.2)
+            assert not queued.done()
+            release.set()
+            await queued
+
+    asyncio.run(run())
+    assert conc.peak == 1
 
 
 def test_exclusive_is_reentrant():

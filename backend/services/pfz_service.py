@@ -61,14 +61,21 @@ logger = logging.getLogger("orca.pfz")
 _SST_DATASET_ID = "METOFFICE-GLO-SST-L4-NRT-OBS-SST-V2"
 _CHL_DATASET_ID = "cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D"
 
-# Same headroom rationale as marine_data_agent._CHL_TIMEOUT: open_dataset()
-# has no timeout of its own, and a real successful grid fetch was observed
-# to take ~9-11s (Copernicus auth + lazy Zarr-store open, not just network
-# latency) — this bounds the sync call, not just the network round trip.
-_GRID_FETCH_TIMEOUT = 25.0
+# open_dataset() has no timeout of its own, so this bounds each blocking
+# grid read (timed from when the read actually starts — see
+# heavy_work.run_in_thread). Sized for Render's 0.1 CPU, not a laptop:
+# measured there in a 512MB container, the shared all-anchor opens take
+# ~15s (SST) and ~25s (chlorophyll) each on their own, ~40s when a refresh
+# runs them together, and a per-anchor fallback open ~20s. The old 25s
+# (sized from ~9-11s laptop timings) timed out every refresh on Render, so
+# it always came back with zero zones. 120s is ~3x the slowest of those —
+# it's only here to cut off a genuinely hung call.
+_GRID_FETCH_TIMEOUT = 120.0
 # One retry on top of the first attempt — a transient Copernicus hiccup
 # (auth server flakiness, a momentary connection cap) shouldn't drop this
-# whole anchor's zones when a second attempt often succeeds.
+# whole anchor's zones when a second attempt often succeeds. Never after a
+# timeout, though: the timed-out read's thread is still running, and a
+# second copy next to it only adds memory and competes for the same CPU.
 _GRID_FETCH_MAX_ATTEMPTS = 2
 
 # Despite the "gapfree" name, the newest day in this dataset is frequently
@@ -262,9 +269,10 @@ class SharedGridSources:
         last_exc: Exception | None = None
         for _attempt in range(_GRID_FETCH_MAX_ATTEMPTS):
             try:
-                return await asyncio.wait_for(
-                    heavy_work.run_in_thread(opener, *self._box, username, password), timeout=_GRID_FETCH_TIMEOUT
-                )
+                return await heavy_work.run_in_thread(opener, *self._box, username, password, timeout=_GRID_FETCH_TIMEOUT)
+            except TimeoutError as exc:
+                last_exc = exc
+                break  # see _GRID_FETCH_MAX_ATTEMPTS
             except Exception as exc:
                 last_exc = exc
         logger.warning(
@@ -295,25 +303,29 @@ async def fetch_environmental_grid(
 
     sst_da = chl_da = None
     last_exc: Exception | None = None
+    attempt = 0
     for attempt in range(1, _GRID_FETCH_MAX_ATTEMPTS + 1):
         try:
             sst_da, chl_da = await asyncio.gather(
-                asyncio.wait_for(
-                    heavy_work.run_in_thread(_fetch_sst_grid_sync, min_lon, max_lon, min_lat, max_lat, username, password, sst_source),
+                heavy_work.run_in_thread(
+                    _fetch_sst_grid_sync, min_lon, max_lon, min_lat, max_lat, username, password, sst_source,
                     timeout=_GRID_FETCH_TIMEOUT,
                 ),
-                asyncio.wait_for(
-                    heavy_work.run_in_thread(_fetch_chlorophyll_grid_sync, min_lon, max_lon, min_lat, max_lat, username, password, chl_source),
+                heavy_work.run_in_thread(
+                    _fetch_chlorophyll_grid_sync, min_lon, max_lon, min_lat, max_lat, username, password, chl_source,
                     timeout=_GRID_FETCH_TIMEOUT,
                 ),
             )
             break
+        except TimeoutError as exc:
+            last_exc = exc
+            break  # see _GRID_FETCH_MAX_ATTEMPTS
         except Exception as exc:
             last_exc = exc
     if sst_da is None or chl_da is None:
         logger.warning(
             "PFZ grid fetch failed for box (%.2f,%.2f)-(%.2f,%.2f) after %d attempt(s): %s",
-            min_lon, min_lat, max_lon, max_lat, _GRID_FETCH_MAX_ATTEMPTS,
+            min_lon, min_lat, max_lon, max_lat, attempt,
             describe_exception(last_exc, timeout=_GRID_FETCH_TIMEOUT),
         )
         return None

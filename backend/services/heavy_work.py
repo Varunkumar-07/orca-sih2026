@@ -198,15 +198,20 @@ async def exclusive(label: str, max_threads: int | None = None) -> AsyncIterator
         slot.owner_done()
 
 
-async def run_in_thread(fn: Callable[..., T], *args: Any) -> T:
+async def run_in_thread(fn: Callable[..., T], *args: Any, timeout: float | None = None) -> T:
     """asyncio.to_thread(fn, *args), but on the heavy-work pool and counted
     against the current heavy-work slot until the thread itself finishes —
     even if this await is cancelled or times out first. Takes its own slot
-    when called outside exclusive()."""
+    when called outside exclusive().
+
+    `timeout` (TimeoutError when exceeded) starts once this call has its
+    thread seat, so time spent queued behind the slot's other reads doesn't
+    eat into it — at 0.1 CPU that queueing alone used to exceed the PFZ
+    refresh's whole budget."""
     slot = _current_slot.get()
     if slot is None or slot.released:
         async with exclusive(getattr(fn, "__name__", "heavy read")):
-            return await run_in_thread(fn, *args)
+            return await run_in_thread(fn, *args, timeout=timeout)
 
     loop = asyncio.get_running_loop()
     lock = threading.Lock()
@@ -251,4 +256,4 @@ async def run_in_thread(fn: Callable[..., T], *args: Any) -> T:
     ctx = contextvars.copy_context()
     future = loop.run_in_executor(_executor, ctx.run, call)
     future.add_done_callback(on_done)
-    return await future
+    return await asyncio.wait_for(future, timeout)

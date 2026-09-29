@@ -21,6 +21,9 @@ Covers:
     they'd otherwise score highest; shape mismatch raises; a
     uniform/no-signal grid returns an empty list; returned candidates
     stay >= min_separation_km apart from each other
+  - grid reads: a timed-out read is never retried (its thread is still
+    running); a real error is retried once — for per-anchor fetches and
+    the shared all-anchor dataset opens alike
   - get_nearest_anchor_zones (Phase 2, Chat-PFZ Live-Data Integration):
     resolves an arbitrary query point to its nearest anchor's cached
     zones with distance_km recomputed from the query point; a query
@@ -35,6 +38,7 @@ Run from project root:  PYTHONPATH=. pytest   or   pytest
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import timedelta
 from typing import ClassVar
 
@@ -130,6 +134,79 @@ class TestFetchEnvironmentalGrid:
 
         result = asyncio.run(pfz.fetch_environmental_grid(79.0, 80.0, 9.0, 10.0))
         assert result is None
+
+    def test_timed_out_read_is_not_retried(self, monkeypatch):
+        """A retry would start a second read next to the still-running one
+        (on Render's 0.1 CPU, every read used to time out, doubling them)."""
+        monkeypatch.setenv("COPERNICUSMARINE_USERNAME", "u")
+        monkeypatch.setenv("COPERNICUSMARINE_PASSWORD", "p")
+        monkeypatch.setattr(pfz, "_GRID_FETCH_TIMEOUT", 0.05)
+        calls = {"n": 0}
+
+        def slow(*_a, **_k):
+            calls["n"] += 1
+            time.sleep(0.2)
+
+        chl_da = _make_da(np.linspace(9, 10, 4), np.linspace(79, 80, 4), np.full((4, 4), 0.5), "2026-09-12")
+        monkeypatch.setattr(pfz, "_fetch_sst_grid_sync", slow)
+        monkeypatch.setattr(pfz, "_fetch_chlorophyll_grid_sync", lambda *_a, **_k: chl_da)
+
+        assert asyncio.run(pfz.fetch_environmental_grid(79.0, 80.0, 9.0, 10.0)) is None
+        assert calls["n"] == 1
+
+    def test_real_error_is_retried_once(self, monkeypatch):
+        monkeypatch.setenv("COPERNICUSMARINE_USERNAME", "u")
+        monkeypatch.setenv("COPERNICUSMARINE_PASSWORD", "p")
+        lats, lons = np.linspace(9, 10, 4), np.linspace(79, 80, 4)
+        sst_da = _make_da(lats, lons, np.full((4, 4), 28.0), "2026-09-12")
+        chl_da = _make_da(lats, lons, np.full((4, 4), 0.5), "2026-09-12")
+        outcomes = iter([ConnectionError("auth hiccup"), sst_da])
+
+        def flaky(*_a, **_k):
+            item = next(outcomes)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        monkeypatch.setattr(pfz, "_fetch_sst_grid_sync", flaky)
+        monkeypatch.setattr(pfz, "_fetch_chlorophyll_grid_sync", lambda *_a, **_k: chl_da)
+
+        assert asyncio.run(pfz.fetch_environmental_grid(79.0, 80.0, 9.0, 10.0)) is not None
+
+
+class TestSharedGridSources:
+    def _opener(self, fn):
+        calls = {"n": 0}
+
+        def opener(*_a):
+            calls["n"] += 1
+            return fn()
+
+        opener.__name__ = "_open_test_dataset_sync"
+        return opener, calls
+
+    def test_timed_out_open_is_not_retried(self, monkeypatch):
+        monkeypatch.setattr(pfz, "_GRID_FETCH_TIMEOUT", 0.05)
+        opener, calls = self._opener(lambda: time.sleep(0.2))
+        sources = pfz.SharedGridSources(70.0, 90.0, 8.0, 23.0)
+
+        assert asyncio.run(sources._open(opener, "u", "p")) is None
+        assert calls["n"] == 1
+
+    def test_failed_open_is_retried_once(self):
+        outcomes = iter([ConnectionError("auth hiccup"), "dataset"])
+
+        def flaky():
+            item = next(outcomes)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        opener, calls = self._opener(flaky)
+        sources = pfz.SharedGridSources(70.0, 90.0, 8.0, 23.0)
+
+        assert asyncio.run(sources._open(opener, "u", "p")) == "dataset"
+        assert calls["n"] == 2
 
 
 class TestFindPfzCandidates:
