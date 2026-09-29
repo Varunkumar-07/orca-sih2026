@@ -2,6 +2,8 @@
 
 Marine EcoSystem Reasoning with Collaborative Agents. Our Smart India Hackathon 2026 project for problem statement SIH26176 (ISRO, Space Technology, Software).
 
+Live demo: https://orca-frontend-oolk.onrender.com. It runs on Render's free tier, which puts the server to sleep when idle, so the first load can take about a minute.
+
 [![CI](https://github.com/Varunkumar-07/orca-sih2026/actions/workflows/ci.yml/badge.svg)](https://github.com/Varunkumar-07/orca-sih2026/actions/workflows/ci.yml)
 
 ## Problem
