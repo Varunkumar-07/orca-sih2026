@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { MapView } from '../components/MapView'
 import type { MapPayload, RouteResponse, ZoneRecord } from '../types'
+import { ensureOk, friendlyError, devBackendHint } from '../lib/httpError'
 
 function getUserLocation(): Promise<{ lat: number; lon: number } | null> {
   if (typeof navigator === 'undefined' || !navigator.geolocation) return Promise.resolve(null)
@@ -46,15 +47,13 @@ export function RoutePlannerPage() {
   useEffect(() => {
     let cancelled = false
     fetch('/api/zones')
-      .then((res) => {
-        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-        return res.json() as Promise<{ zones: ZoneRecord[] }>
-      })
+      .then(ensureOk)
+      .then((res) => res.json() as Promise<{ zones: ZoneRecord[] }>)
       .then((data) => {
         if (!cancelled) setZones(data.zones)
       })
       .catch((e: unknown) => {
-        if (!cancelled) setZonesError(e instanceof Error ? e.message : String(e))
+        if (!cancelled) setZonesError(friendlyError(e))
       })
     return () => {
       cancelled = true
@@ -93,10 +92,10 @@ export function RoutePlannerPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ start: { lat, lon }, destination_zone_id: destinationZoneId }),
       })
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+      await ensureOk(res)
       setResult((await res.json()) as RouteResponse)
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(friendlyError(e))
     } finally {
       setLoading(false)
     }
@@ -159,7 +158,7 @@ export function RoutePlannerPage() {
         <div className="w-full lg:w-[340px] shrink-0 rounded-[20px] bg-white/15 backdrop-blur-[18px] border border-white/40 shadow-lg min-h-0 overflow-y-auto p-3 space-y-3">
           {zonesError && (
             <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">
-              Couldn't load zones: {zonesError}. Is the backend running on :8000?
+              Couldn't load zones: {zonesError}{devBackendHint()}
             </div>
           )}
           {error && (

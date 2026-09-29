@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { HistoryListResponse, HistoryRecordDetail, PageSource } from '../types'
+import { ensureOk, friendlyError, devBackendHint } from '../lib/httpError'
 
 const PAGE_SOURCES: PageSource[] = ['chat', 'zones', 'weather', 'route', 'alerts', 'analytics', 'download']
 
@@ -102,15 +103,13 @@ export function HistoryPage() {
     if (pageSource) params.set('page_source', pageSource)
 
     fetch(`/api/history?${params.toString()}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-        return res.json() as Promise<HistoryListResponse>
-      })
+      .then(ensureOk)
+      .then((res) => res.json() as Promise<HistoryListResponse>)
       .then((d) => {
         if (fetchTokenRef.current === token) setData(d)
       })
       .catch((e: unknown) => {
-        if (fetchTokenRef.current === token) setError(e instanceof Error ? e.message : String(e))
+        if (fetchTokenRef.current === token) setError(friendlyError(e))
       })
       .finally(() => {
         if (fetchTokenRef.current === token) setLoading(false)
@@ -143,12 +142,10 @@ export function HistoryPage() {
     setDetail(null)
     setDetailError(null)
     fetch(`/api/history/${id}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-        return res.json() as Promise<HistoryRecordDetail>
-      })
+      .then(ensureOk)
+      .then((res) => res.json() as Promise<HistoryRecordDetail>)
       .then(setDetail)
-      .catch((e: unknown) => setDetailError(e instanceof Error ? e.message : String(e)))
+      .catch((e: unknown) => setDetailError(friendlyError(e)))
   }
 
   const total = data?.total ?? 0
@@ -186,7 +183,7 @@ export function HistoryPage() {
 
         {error && (
           <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">
-            Couldn't load history: {error}. Is the backend running on :8000?
+            Couldn't load history: {error}{devBackendHint()}
           </div>
         )}
 
@@ -249,7 +246,7 @@ export function HistoryPage() {
           <>
             {detailError && (
               <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">
-                Couldn't load record detail: {detailError}.
+                Couldn't load record detail: {detailError}
               </div>
             )}
             {detail && detail.id === selectedId && <HistoryDetailPanel record={detail} onClose={() => setSelectedId(null)} />}

@@ -138,6 +138,10 @@ export interface AlertRecord {
 export interface AlertsResponse {
   alerts: AlertRecord[];
   checked_zones: number;
+  // Zones whose live weather couldn't be fetched (e.g. the weather
+  // service's quota ran out) — they contribute no alerts, so a result with
+  // any of these must not be presented as "all zones calm".
+  unavailable_zones?: number;
   generated_at: string;
 }
 

@@ -57,6 +57,18 @@ describe('HistoryPage — listing', () => {
     await waitFor(() => expect(screen.getByText(/Couldn't load history/)).toBeInTheDocument())
   })
 
+  it('shows a clean message with no dev-only backend hint in production builds', async () => {
+    vi.stubEnv('DEV', false)
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(null, false)))
+    render(<HistoryPage />)
+    await waitFor(() =>
+      expect(screen.getByText(/Couldn't load history: Something went wrong on the server/)).toBeInTheDocument(),
+    )
+    expect(screen.queryByText(/:8000/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/500/)).not.toBeInTheDocument()
+    vi.unstubAllEnvs()
+  })
+
   it('renders one row per history item once loaded', async () => {
     installFetchRouter({ '/api/history': () => listResponse() })
     render(<HistoryPage />)

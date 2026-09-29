@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { AnalyticsResponse, AnalyticsSeries, ZoneRecord } from '../types'
+import { ensureOk, friendlyError, devBackendHint } from '../lib/httpError'
 
 const RANGE_OPTIONS = [
   { label: '7 Days', days: 7 },
@@ -199,12 +200,10 @@ export function AnalyticsPage() {
 
   useEffect(() => {
     fetch('/api/zones')
-      .then((res) => {
-        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-        return res.json() as Promise<{ zones: ZoneRecord[] }>
-      })
+      .then(ensureOk)
+      .then((res) => res.json() as Promise<{ zones: ZoneRecord[] }>)
       .then((d) => setZones(d.zones))
-      .catch((e: unknown) => setZonesError(e instanceof Error ? e.message : String(e)))
+      .catch((e: unknown) => setZonesError(friendlyError(e)))
   }, [])
 
   const zoneOptions = useMemo(() => zones?.filter((z) => z.type === 'pfz' && z.coordinates) ?? [], [zones])
@@ -224,15 +223,13 @@ export function AnalyticsPage() {
     start.setDate(start.getDate() - rangeDays)
 
     fetch(`/api/analytics/historical?lat=${lat}&lon=${lon}&start_date=${isoDate(start)}&end_date=${isoDate(end)}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-        return res.json() as Promise<AnalyticsResponse>
-      })
+      .then(ensureOk)
+      .then((res) => res.json() as Promise<AnalyticsResponse>)
       .then((d) => {
         if (!cancelled) setData(d)
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+        if (!cancelled) setError(friendlyError(e))
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -296,12 +293,12 @@ export function AnalyticsPage() {
 
         {zonesError && (
           <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">
-            Couldn't load zones: {zonesError}. Is the backend running on :8000?
+            Couldn't load zones: {zonesError}{devBackendHint()}
           </div>
         )}
         {error && (
           <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">
-            Couldn't load historical data: {error}.
+            Couldn't load historical data: {error}
           </div>
         )}
 

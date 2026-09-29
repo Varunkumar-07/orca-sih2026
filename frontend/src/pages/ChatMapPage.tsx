@@ -3,6 +3,7 @@ import { ChatPanel } from '../components/ChatPanel'
 import { MapView } from '../components/MapView'
 import { TracePanel } from '../components/TracePanel'
 import type { FinalResponse, MapPayload, TraceStep } from '../types'
+import { ensureOk, friendlyError, devBackendHint } from '../lib/httpError'
 
 type Message = { role: 'user' | 'orca'; text: string }
 
@@ -152,10 +153,7 @@ export default function ChatMapPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
-      if (!res.ok) {
-        const txt = await res.text()
-        throw new Error(`${res.status} ${txt}`)
-      }
+      await ensureOk(res)
       // Extract Session Header — persist across turns for multi-turn memory
       const newSessionId = res.headers.get('X-Session-Id')
       if (newSessionId) {
@@ -174,11 +172,11 @@ export default function ChatMapPage() {
       setDetectedLanguage(data.detected_language ?? null)
       setResponseLanguage(data.response_language ?? null)
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e)
+      const msg = friendlyError(e)
       setError(msg)
       setMessages((m) => [
         ...m,
-        { role: 'orca', text: `Sorry — request failed: ${msg}\nTry demo mode or check backend is running on :8000.` },
+        { role: 'orca', text: `Sorry — request failed: ${msg}\nYou can try demo mode in the meantime.${devBackendHint()}` },
       ])
     } finally {
       setLoading(false)

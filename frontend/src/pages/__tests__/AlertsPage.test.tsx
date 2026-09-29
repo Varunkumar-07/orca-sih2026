@@ -37,6 +37,24 @@ describe('AlertsPage — loading and empty state', () => {
     expect(screen.getByText(/All 11 tracked fishing zones/)).toBeInTheDocument()
   })
 
+  it('does not claim all zones are calm when live weather was unavailable for every zone', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(alertsResponse({ unavailable_zones: 11 }))))
+    render(<AlertsPage />)
+
+    await waitFor(() => expect(screen.getByText(/alert status is unknown/)).toBeInTheDocument())
+    expect(screen.queryByText(/No active cyclone or lightning alerts/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/report calm conditions/)).not.toBeInTheDocument()
+  })
+
+  it('qualifies the all-clear when only some zones could be checked', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(alertsResponse({ unavailable_zones: 3 }))))
+    render(<AlertsPage />)
+
+    await waitFor(() => expect(screen.getByText(/couldn't be checked for 3 of 11 zones/)).toBeInTheDocument())
+    expect(screen.getByText(/The 8 zones that could be checked currently report calm conditions/)).toBeInTheDocument()
+    expect(screen.queryByText(/All 11 tracked fishing zones/)).not.toBeInTheDocument()
+  })
+
   it('shows an error banner when the fetch fails', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(null, false)))
     render(<AlertsPage />)

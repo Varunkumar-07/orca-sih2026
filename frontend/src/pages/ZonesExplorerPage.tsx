@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { MapView } from '../components/MapView'
 import type { MapPayload, ZoneRecord, ZonesResponse } from '../types'
+import { ensureOk, friendlyError, devBackendHint } from '../lib/httpError'
 
 function zonesToMapPayload(zones: ZoneRecord[]): MapPayload {
   const overlays: MapPayload['overlays'] = []
@@ -119,15 +120,13 @@ export function ZonesExplorerPage() {
   useEffect(() => {
     let cancelled = false
     fetch('/api/zones')
-      .then((res) => {
-        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-        return res.json() as Promise<ZonesResponse>
-      })
+      .then(ensureOk)
+      .then((res) => res.json() as Promise<ZonesResponse>)
       .then((data) => {
         if (!cancelled) setZones(data.zones)
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e))
+        if (!cancelled) setError(friendlyError(e))
       })
     return () => {
       cancelled = true
@@ -173,7 +172,7 @@ export function ZonesExplorerPage() {
         <div className="w-full lg:w-[340px] shrink-0 rounded-[20px] bg-white/15 backdrop-blur-[18px] border border-white/40 shadow-lg min-h-0 overflow-y-auto p-3 space-y-3">
           {error && (
             <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">
-              Couldn't load zones: {error}. Is the backend running on :8000?
+              Couldn't load zones: {error}{devBackendHint()}
             </div>
           )}
 

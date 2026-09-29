@@ -118,7 +118,8 @@ describe('RoutePlannerPage — planning a route', () => {
     await user.selectOptions(screen.getByRole('combobox'), 'KOCHI-PFZ-001')
     await user.click(screen.getByRole('button', { name: /Plan Route/ }))
 
-    await waitFor(() => expect(screen.getByText(/500 Error/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText(/Something went wrong on the server/)).toBeInTheDocument())
+    expect(screen.queryByText(/500 Error/)).not.toBeInTheDocument()
   })
 })
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AlertRecord, AlertsResponse } from '../types'
+import { ensureOk, friendlyError, devBackendHint } from '../lib/httpError'
 
 const ALERT_ICON: Record<AlertRecord['alert_type'], string> = {
   cyclone: '🌀',
@@ -43,15 +44,13 @@ export function AlertsPage() {
 
   function fetchAlerts() {
     fetch('/api/alerts')
-      .then((res) => {
-        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-        return res.json() as Promise<AlertsResponse>
-      })
+      .then(ensureOk)
+      .then((res) => res.json() as Promise<AlertsResponse>)
       .then((d) => {
         setData(d)
         setError(null)
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .catch((e: unknown) => setError(friendlyError(e)))
       .finally(() => setLoading(false))
   }
 
@@ -65,6 +64,7 @@ export function AlertsPage() {
     fetchAlerts()
   }
 
+  const unavailable = data?.unavailable_zones ?? 0
   const cycloneCount = data?.alerts.filter((a) => a.alert_type === 'cyclone').length ?? 0
   const lightningCount = data?.alerts.filter((a) => a.alert_type === 'lightning').length ?? 0
 
@@ -100,7 +100,7 @@ export function AlertsPage() {
 
         {error && (
           <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">
-            Couldn't load alerts: {error}. Is the backend running on :8000?
+            Couldn't load alerts: {error}{devBackendHint()}
           </div>
         )}
 
@@ -121,12 +121,22 @@ export function AlertsPage() {
 
         {loading && !data && <div className="text-xs text-slate-400 px-1">Checking all tracked zones for active alerts…</div>}
 
-        {data && data.alerts.length === 0 && (
+        {data && unavailable > 0 && (
+          <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2">
+            {unavailable === data.checked_zones
+              ? "Live weather couldn't be checked for any tracked zone right now — alert status is unknown. Please try again later."
+              : `Live weather couldn't be checked for ${unavailable} of ${data.checked_zones} zones — alerts may be incomplete.`}
+          </div>
+        )}
+
+        {data && data.alerts.length === 0 && unavailable < data.checked_zones && (
           <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-6 text-center">
             <div className="text-2xl mb-2">✅</div>
             <p className="text-sm font-semibold text-emerald-800">No active cyclone or lightning alerts</p>
             <p className="text-xs text-emerald-700 mt-1">
-              All {data.checked_zones} tracked fishing zones currently report calm conditions.
+              {unavailable > 0
+                ? `The ${data.checked_zones - unavailable} zones that could be checked currently report calm conditions.`
+                : `All ${data.checked_zones} tracked fishing zones currently report calm conditions.`}
             </p>
           </div>
         )}

@@ -145,7 +145,9 @@ describe('ChatMapPage — sending a query', () => {
     // Appears twice by design — once in the chat bubble, once in the
     // dismissable error banner above it — so assert there's at least one
     // rather than picking an arbitrarily "the" element.
-    expect(screen.getAllByText(/500 internal error/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/Something went wrong on the server/).length).toBeGreaterThan(0)
+    // The raw status/body stays out of the UI (console only).
+    expect(screen.queryByText(/internal error/)).not.toBeInTheDocument()
   })
 
   it('the re-entrancy guard blocks a second send while the first request is still in flight', async () => {

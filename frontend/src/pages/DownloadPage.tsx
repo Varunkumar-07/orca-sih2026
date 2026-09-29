@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ZoneRecord } from '../types'
+import { ensureOk, friendlyError, devBackendHint } from '../lib/httpError'
 
 const VARIABLE_GROUPS: { title: string; variables: string[] }[] = [
   { title: 'Temperature', variables: ['sst_celsius', 'air_temp_celsius'] },
@@ -71,12 +72,10 @@ export function DownloadPage() {
 
   useEffect(() => {
     fetch('/api/zones')
-      .then((res) => {
-        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-        return res.json() as Promise<{ zones: ZoneRecord[] }>
-      })
+      .then(ensureOk)
+      .then((res) => res.json() as Promise<{ zones: ZoneRecord[] }>)
       .then((d) => setZones(d.zones))
-      .catch((e: unknown) => setZonesError(e instanceof Error ? e.message : String(e)))
+      .catch((e: unknown) => setZonesError(friendlyError(e)))
   }, [])
 
   const zoneOptions = useMemo(() => zones?.filter((z) => z.type === 'pfz' && z.coordinates) ?? [], [zones])
@@ -118,10 +117,7 @@ export function DownloadPage() {
     })
     try {
       const res = await fetch(`/api/export?${params.toString()}`)
-      if (!res.ok) {
-        const txt = await res.text()
-        throw new Error(`${res.status} ${txt}`)
-      }
+      await ensureOk(res)
       const blob = await res.blob()
       const disposition = res.headers.get('Content-Disposition') ?? ''
       const match = /filename="?([^"]+)"?/.exec(disposition)
@@ -135,7 +131,7 @@ export function DownloadPage() {
       a.remove()
       URL.revokeObjectURL(url)
     } catch (e: unknown) {
-      setExportError(e instanceof Error ? e.message : String(e))
+      setExportError(friendlyError(e))
     } finally {
       setExporting(false)
     }
@@ -160,7 +156,7 @@ export function DownloadPage() {
       <div className="rounded-[20px] bg-white/15 backdrop-blur-[18px] border border-white/40 shadow-lg p-4 space-y-4">
         {zonesError && (
           <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">
-            Couldn't load zones: {zonesError}. Is the backend running on :8000?
+            Couldn't load zones: {zonesError}{devBackendHint()}
           </div>
         )}
         {exportError && (

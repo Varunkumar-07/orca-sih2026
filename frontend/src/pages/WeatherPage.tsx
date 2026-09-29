@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect } from 'react'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { ForecastResponse, WeatherSnapshot, ZoneRecord } from '../types'
+import { ensureOk, friendlyError, devBackendHint } from '../lib/httpError'
 
 // Layout — a single-zone live-conditions card, a real 7-day trend chart,
 // a "Run ML Forecast" button, and a separate visually-distinct ML section
@@ -27,7 +28,7 @@ function zonesToOptions(zones: ZoneRecord[]): LocationOption[] {
 
 async function fetchWeather(lat: number, lon: number): Promise<WeatherSnapshot> {
   const res = await fetch(`/api/weather?lat=${lat}&lon=${lon}`)
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  await ensureOk(res)
   return res.json() as Promise<WeatherSnapshot>
 }
 
@@ -36,7 +37,7 @@ async function fetchTrend(lat: number, lon: number): Promise<{ date: string; val
   const start = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000)
   const iso = (d: Date) => d.toISOString().slice(0, 10)
   const res = await fetch(`/api/analytics/historical?lat=${lat}&lon=${lon}&start_date=${iso(start)}&end_date=${iso(end)}&variables=wave_height_m`)
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  await ensureOk(res)
   const data = await res.json()
   const series = data.series?.wave_height_m
   if (!series) return []
@@ -319,12 +320,10 @@ export function WeatherPage() {
 
   useEffect(() => {
     fetch('/api/zones')
-      .then((res) => {
-        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-        return res.json() as Promise<{ zones: ZoneRecord[] }>
-      })
+      .then(ensureOk)
+      .then((res) => res.json() as Promise<{ zones: ZoneRecord[] }>)
       .then((d) => setZones(d.zones))
-      .catch((e: unknown) => setZonesError(e instanceof Error ? e.message : String(e)))
+      .catch((e: unknown) => setZonesError(friendlyError(e)))
   }, [])
 
   const options = useMemo(() => (zones ? zonesToOptions(zones) : []), [zones])
@@ -343,7 +342,7 @@ export function WeatherPage() {
       const trendData = await fetchTrend(a.lat, a.lon)
       setTrend(trendData)
     } catch (e: unknown) {
-      setFetchError(e instanceof Error ? e.message : String(e))
+      setFetchError(friendlyError(e))
     } finally {
       setLoading(false)
       setTrendLoading(false)
@@ -355,10 +354,10 @@ export function WeatherPage() {
     setForecastLoading(true)
     try {
       const res = await fetch(`/api/weather/forecast?zone=${encodeURIComponent(zoneA)}`)
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+      await ensureOk(res)
       setForecast((await res.json()) as ForecastResponse)
     } catch (e: unknown) {
-      setForecast({ zone: zoneA, lat: 0, lon: 0, status: 'error', reason: e instanceof Error ? e.message : String(e), forecast: [], generated_at: '' })
+      setForecast({ zone: zoneA, lat: 0, lon: 0, status: 'error', reason: friendlyError(e), forecast: [], generated_at: '' })
     } finally {
       setForecastLoading(false)
     }
@@ -375,7 +374,7 @@ export function WeatherPage() {
       setCompareSnapA(resA)
       setCompareSnapB(resB)
     } catch (e: unknown) {
-      setCompareError(e instanceof Error ? e.message : String(e))
+      setCompareError(friendlyError(e))
     } finally {
       setCompareLoading(false)
     }
@@ -400,12 +399,12 @@ export function WeatherPage() {
       <div className="rounded-[20px] bg-white/15 backdrop-blur-[18px] border border-white/40 shadow-lg p-4 space-y-4">
         {zonesError && (
           <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">
-            Couldn't load zones: {zonesError}. Is the backend running on :8000?
+            Couldn't load zones: {zonesError}{devBackendHint()}
           </div>
         )}
         {fetchError && (
           <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">
-            Couldn't fetch weather: {fetchError}.
+            Couldn't fetch weather: {fetchError}
           </div>
         )}
 
@@ -444,7 +443,7 @@ export function WeatherPage() {
           <h2 className="text-xs font-semibold tracking-widest uppercase text-slate-600 mb-3">Compare Two Zones</h2>
           {compareError && (
             <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2 mb-3">
-              Couldn't fetch weather: {compareError}.
+              Couldn't fetch weather: {compareError}
             </div>
           )}
           <div className="rounded-xl border border-slate-200 bg-white p-3 flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 mb-4">
