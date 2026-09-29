@@ -45,7 +45,7 @@ services:
       # not here, since they're secrets and this file is committed:
       #   GROQ_API_KEY, PROTECTED_PLANET_API_KEY, BHASHINI_USER_ID,
       #   BHASHINI_ULCA_API_KEY, COPERNICUSMARINE_USERNAME,
-      #   COPERNICUSMARINE_PASSWORD, ORCA_API_KEY
+      #   COPERNICUSMARINE_PASSWORD, ORCA_API_KEY, OPEN_METEO_API_KEY
 
   # Vite/React frontend, served as a static site. The rewrite below proxies
   # /api/* to the backend service server-side (Render's edge does the
