@@ -515,3 +515,19 @@ def test_tide_is_shown_as_text_not_a_raw_dict():
 
     assert "Tide: high tide 14:32, low tide 08:10" in final.answer_text
     assert "{" not in final.answer_text
+
+
+@pytest.mark.parametrize("fixture,_expected_inside", FIXTURE_CASES)
+def test_reporting__every_answer_has_a_marine_line(fixture, _expected_inside):
+    """The Marine line (SST, chlorophyll, zones found) used to be printed
+    only on PROHIBITED answers — a plain "is it safe near Chennai?" answer
+    had none, for every city."""
+    bundle = _fresh(fixture)
+    run_ocean_analytics(bundle)
+    run_geospatial(bundle)
+    final = run_reporting(bundle)
+
+    marine_lines = [line for line in final.answer_text.splitlines() if line.startswith("Marine: ")]
+    assert len(marine_lines) == 1
+    for zone in bundle.marine.pfz_zones:
+        assert str(zone["zone_id"]) in marine_lines[0]

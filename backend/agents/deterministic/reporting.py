@@ -234,12 +234,14 @@ def _build_answer(bundle: EvidenceBundle) -> str:
         return "\n".join(lines)
 
     # Normal path — fisherman-friendly: one plain-language headline verdict
-    # first (mirrors the restricted-zone branch above), then only the 2-3
-    # supporting facts that justify it — not the full technical dump. Marine
-    # sensor values and ocean-analytics trend detail aren't dropped, just no
-    # longer repeated here: they stay fully available in the live reasoning
-    # trace panel for anyone who wants to audit the underlying evidence.
+    # first (mirrors the restricted-zone branch above), then the supporting
+    # facts that justify it — not the full technical dump. The Marine line
+    # (SST, chlorophyll, the zones found) stays: it is where "where should I
+    # fish?" gets answered, and it used to appear only on PROHIBITED answers.
+    # Ocean-analytics trend detail isn't repeated here; it stays in the live
+    # reasoning trace panel for anyone who wants to audit the evidence.
     lines.append(_format_headline(bundle))
+    lines.append(f"Marine: {_format_marine(bundle)}")
     lines.append(f"Weather: {_format_weather(bundle)}")
     lines.append(f"Geospatial: {_format_geospatial(bundle)}")
 

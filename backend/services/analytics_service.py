@@ -82,7 +82,7 @@ cached, so the next request retries it (see get_historical_analytics).
 import asyncio
 import logging
 import math
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from backend.error_utils import describe_exception
@@ -369,6 +369,13 @@ def _aggregate_current_daily(hourly: dict) -> tuple[list[str], list[float], list
 # ---------------------------------------------------------------------------
 
 async def _fetch_archive_daily(lat: float, lon: float, start_date: str, end_date: str) -> dict:
+    # The archive only accepts end_date up to the current UTC day. Callers
+    # send the user's local "today", which just after midnight IST is still
+    # tomorrow in UTC — asking for it fails the whole request. That day has
+    # no archive data yet anyway, so stop at UTC today instead.
+    end_date = min(end_date, datetime.now(UTC).date().isoformat())
+    if start_date > end_date:
+        return {}
     data = await open_meteo.get_json(
         _ARCHIVE_URL,
         {

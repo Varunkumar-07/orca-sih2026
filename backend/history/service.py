@@ -26,8 +26,10 @@ logger = logging.getLogger("orca.history")
 # a naive date directly against it (as this module used to) is the same
 # class of IST day-boundary bug already fixed elsewhere in this codebase
 # (see backend/services/weather_service.py's own _IST) for up to 5.5
-# hours around midnight IST.
-_IST = timezone(timedelta(hours=5, minutes=30))
+# hours around midnight IST. The History page sends its own UTC offset
+# (the days it shows are the browser's local days); IST is the default for
+# any caller that doesn't.
+IST_OFFSET_MINUTES = 330
 _MAX_LIST_LIMIT = 200
 
 
@@ -77,6 +79,19 @@ async def log_history(
         logger.warning("Failed to log history record for page_source=%s: %s", page_source, exc)
 
 
+def day_range_bounds(
+    start_date: date | None, end_date: date | None, utc_offset_minutes: int = IST_OFFSET_MINUTES
+) -> tuple[datetime | None, datetime | None]:
+    """[since, until) instants covering the calendar days start_date..
+    end_date in a timezone utc_offset_minutes ahead of UTC. end_date has no
+    time component, so `until` is the start of the *next* local day — the
+    end day's own rows (including its 00:00-05:30 IST ones) are included."""
+    tz = timezone(timedelta(minutes=utc_offset_minutes))
+    since = datetime.combine(start_date, time.min, tzinfo=tz) if start_date else None
+    until = datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=tz) if end_date else None
+    return since, until
+
+
 async def list_history(
     *,
     page_source: str | None = None,
@@ -84,6 +99,7 @@ async def list_history(
     end_date: date | None = None,
     limit: int = 20,
     offset: int = 0,
+    utc_offset_minutes: int = IST_OFFSET_MINUTES,
 ) -> dict:
     # Defense in depth — the router layer also validates these, but this is
     # a public function other callers could reach directly.
@@ -98,15 +114,11 @@ async def list_history(
         filters = []
         if page_source:
             filters.append(HistoryRecord.page_source == page_source)
-        if start_date:
-            filters.append(HistoryRecord.timestamp >= datetime.combine(start_date, time.min, tzinfo=_IST))
-        if end_date:
-            # end_date is a calendar day with no time component — compare
-            # against the start of the *next* IST day so today's own rows
-            # aren't excluded.
-            filters.append(
-                HistoryRecord.timestamp < datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=_IST)
-            )
+        since, until = day_range_bounds(start_date, end_date, utc_offset_minutes)
+        if since is not None:
+            filters.append(HistoryRecord.timestamp >= since)
+        if until is not None:
+            filters.append(HistoryRecord.timestamp < until)
 
         count_stmt = select(func.count()).select_from(HistoryRecord)
         list_stmt = select(HistoryRecord)
