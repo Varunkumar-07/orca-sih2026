@@ -49,6 +49,7 @@ from backend.agents.deterministic.geospatial import (
     haversine_km,
 )
 from backend.error_utils import describe_exception
+from backend.services import heavy_work
 
 logger = logging.getLogger("orca.pfz")
 
@@ -168,7 +169,7 @@ def _fetch_sst_grid_sync(
     min_lon: float, max_lon: float, min_lat: float, max_lat: float, username: str, password: str,
     source: xr.Dataset | None = None,
 ) -> xr.DataArray:
-    """Blocking Copernicus Marine call — run via asyncio.to_thread. Opens
+    """Blocking Copernicus Marine call — run via heavy_work.run_in_thread. Opens
     the dataset lazily (no file download), or — when `source` is an
     already-open wider dataset (see SharedGridSources) — just cuts this box
     out of it.
@@ -196,7 +197,7 @@ def _fetch_chlorophyll_grid_sync(
     min_lon: float, max_lon: float, min_lat: float, max_lat: float, username: str, password: str,
     source: xr.Dataset | None = None,
 ) -> xr.DataArray:
-    """Blocking Copernicus Marine call — run via asyncio.to_thread. Same
+    """Blocking Copernicus Marine call — run via heavy_work.run_in_thread. Same
     dataset as marine_data_agent._fetch_chlorophyll_sync, but keeps the
     full grid instead of collapsing to one nearest point. `source`: same
     as _fetch_sst_grid_sync's.
@@ -262,7 +263,7 @@ class SharedGridSources:
         for _attempt in range(_GRID_FETCH_MAX_ATTEMPTS):
             try:
                 return await asyncio.wait_for(
-                    asyncio.to_thread(opener, *self._box, username, password), timeout=_GRID_FETCH_TIMEOUT
+                    heavy_work.run_in_thread(opener, *self._box, username, password), timeout=_GRID_FETCH_TIMEOUT
                 )
             except Exception as exc:
                 last_exc = exc
@@ -298,11 +299,11 @@ async def fetch_environmental_grid(
         try:
             sst_da, chl_da = await asyncio.gather(
                 asyncio.wait_for(
-                    asyncio.to_thread(_fetch_sst_grid_sync, min_lon, max_lon, min_lat, max_lat, username, password, sst_source),
+                    heavy_work.run_in_thread(_fetch_sst_grid_sync, min_lon, max_lon, min_lat, max_lat, username, password, sst_source),
                     timeout=_GRID_FETCH_TIMEOUT,
                 ),
                 asyncio.wait_for(
-                    asyncio.to_thread(_fetch_chlorophyll_grid_sync, min_lon, max_lon, min_lat, max_lat, username, password, chl_source),
+                    heavy_work.run_in_thread(_fetch_chlorophyll_grid_sync, min_lon, max_lon, min_lat, max_lat, username, password, chl_source),
                     timeout=_GRID_FETCH_TIMEOUT,
                 ),
             )
@@ -503,6 +504,14 @@ _zones_cache_ttl_seconds: float = _ZONES_CACHE_TTL_SECONDS
 # a burst of judges hitting the app right after a TTL rollover.
 _zones_cache_lock = asyncio.Lock()
 
+# Copernicus reads a zone refresh may have running at once (shared dataset
+# opens, per-anchor grid slices, any per-anchor fallback opens), counting
+# reads whose caller already timed out until they actually finish — see
+# heavy_work.exclusive for why. Measured in a 512MB Linux container: at
+# 0.1 CPU (Render free tier) a refresh peaked at 340MB anon with 2 vs
+# 371MB with 4; at 2 CPUs, 2 made the refresh ~4s slower (17.6s -> 21.8s).
+_MAX_REFRESH_THREADS = 2
+
 
 async def get_cached_zones() -> dict:
     """Shared accessor for the live PFZ + restricted-area zone catalog —
@@ -553,7 +562,12 @@ async def get_cached_zones() -> dict:
         from backend.agents.reasoning.planning_agent import _KNOWN_LOCATIONS
 
         anchors = {name: _KNOWN_LOCATIONS[name] for name in _ZONE_EXPLORER_ANCHORS if name in _KNOWN_LOCATIONS}
-        pfz_candidates = await list_live_pfz_zones(anchors)
+        # The whole refresh is one heavy operation: it waits for any
+        # in-flight Copernicus read to finish, and no read starts until
+        # it (and every grid-read thread it started) is done — see
+        # heavy_work.py for why (Render free tier's 512MB).
+        async with heavy_work.exclusive("PFZ zone refresh", max_threads=_MAX_REFRESH_THREADS):
+            pfz_candidates = await list_live_pfz_zones(anchors)
 
         combined: list[dict] = []
         for zone in pfz_candidates:

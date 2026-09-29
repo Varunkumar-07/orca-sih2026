@@ -27,6 +27,11 @@ What this runner does instead:
   after a timeout.
 - A hard cap per attempt so a genuinely hung upstream call eventually
   frees its job slot and a later request can try again.
+- Every read runs under services/heavy_work.py's process-wide slot (shared
+  with the PFZ refresh), so only one Copernicus operation is in memory at
+  a time. Time spent queued for it doesn't count toward the hard cap, and
+  a read that outlives its hard cap keeps holding the slot until its
+  thread really ends.
 """
 
 from __future__ import annotations
@@ -38,6 +43,7 @@ from collections.abc import Callable
 from typing import Any
 
 from backend.error_utils import describe_exception
+from backend.services import heavy_work
 
 logger = logging.getLogger("orca.copernicus")
 
@@ -57,17 +63,18 @@ def reset_state() -> None:
 async def _run_job(key: tuple, fn: Callable[..., Any], args: tuple, label: str) -> Any:
     last_exc: BaseException | None = None
     attempt = 0
-    for attempt in range(1, _MAX_ATTEMPTS + 1):
-        try:
-            value = await asyncio.wait_for(asyncio.to_thread(fn, *args), timeout=_HARD_TIMEOUT_SECONDS)
-        except TimeoutError as exc:
-            last_exc = exc
-            break  # a hung upstream isn't un-hung by piling a second call on top
-        except Exception as exc:  # noqa: BLE001 - any read failure is retried, then re-raised
-            last_exc = exc
-        else:
-            _cache[key] = (time.monotonic(), value)
-            return value
+    async with heavy_work.exclusive(label):
+        for attempt in range(1, _MAX_ATTEMPTS + 1):
+            try:
+                value = await asyncio.wait_for(heavy_work.run_in_thread(fn, *args), timeout=_HARD_TIMEOUT_SECONDS)
+            except TimeoutError as exc:
+                last_exc = exc
+                break  # a hung upstream isn't un-hung by piling a second call on top
+            except Exception as exc:  # noqa: BLE001 - any read failure is retried, then re-raised
+                last_exc = exc
+            else:
+                _cache[key] = (time.monotonic(), value)
+                return value
     logger.warning(
         "%s failed after %d attempt(s): %s",
         label, attempt, describe_exception(last_exc, timeout=_HARD_TIMEOUT_SECONDS),

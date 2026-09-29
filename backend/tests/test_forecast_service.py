@@ -167,3 +167,29 @@ def test_unexpected_exception_degrades_to_error_not_raised(monkeypatch):
 
     assert result["status"] == "error"
     assert "forecast failed" in result["reason"]
+
+
+def test_models_are_loaded_per_request_not_kept_resident(monkeypatch):
+    """All 7 models resident measured ~80MB on Render's 512MB free tier —
+    each request loads them one at a time and drops them again."""
+    _install_sufficient_fetches(monkeypatch)
+    _install_models(monkeypatch)
+    loaded: list[int] = []
+    fake_load = svc._load_horizon_model
+    monkeypatch.setattr(svc, "_load_horizon_model", lambda h: loaded.append(h) or fake_load(h))
+
+    asyncio.run(svc.get_forecast(_LAT, _LON))
+    asyncio.run(svc.get_forecast(_LAT, _LON))
+
+    assert loaded == list(range(1, 8)) * 2
+
+
+def test_loaded_model_predicts_single_threaded(monkeypatch, tmp_path):
+    class _TrainedModel:
+        n_jobs = -1
+
+    (tmp_path / "forecast_day1.pkl").write_bytes(b"")
+    monkeypatch.setattr(svc, "MODELS_DIR", tmp_path)
+    monkeypatch.setattr(svc.joblib, "load", lambda _path: {"model": _TrainedModel(), "features": _FEATURES})
+
+    assert svc._load_horizon_model(1)["model"].n_jobs == 1

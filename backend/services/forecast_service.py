@@ -2,8 +2,8 @@
 Forecast serving — backing GET /weather/forecast.
 
 Loads the 7 per-horizon models backend/scripts/train_forecast_models.py
-produces (lazily, cached for the process lifetime — same pattern ATMOS's
-own predict.py uses for its multi-horizon models) and predicts
+produces (one at a time, per request — see _predict_horizons for why they
+aren't kept resident) and predicts
 wave_height_m / wind_kmh for day+1..day+7 at a given point, using that
 point's OWN real day-0/day-1 conditions — never another location's
 values, and never a previous horizon's predicted output fed back in
@@ -35,6 +35,7 @@ from typing import Any
 import joblib
 import pandas as pd
 
+from backend.services import heavy_work
 from backend.services.analytics_service import _fetch_archive_daily, _fetch_marine_daily
 from backend.time_utils import now_iso as _now_iso
 
@@ -52,7 +53,6 @@ MODEL_DESCRIPTION = (
     "model, which would not generalize to these coordinates."
 )
 
-_model_cache: dict[int, dict] = {}
 _metrics_cache: dict[str, dict] | None = None
 
 
@@ -72,15 +72,45 @@ def _load_metrics() -> dict[str, dict]:
 
 
 def _load_horizon_model(horizon: int) -> dict | None:
-    if horizon not in _model_cache:
-        path = MODELS_DIR / f"forecast_day{horizon}.pkl"
-        if not path.exists():
-            return None
-        try:
-            _model_cache[horizon] = joblib.load(path)
-        except Exception:
-            return None
-    return _model_cache[horizon]
+    path = MODELS_DIR / f"forecast_day{horizon}.pkl"
+    if not path.exists():
+        return None
+    try:
+        artifact = joblib.load(path)
+    except Exception:
+        return None
+    # Trained with n_jobs=-1, which at predict time spins up a joblib
+    # thread per core just to score one row. Same trees, same prediction.
+    model = artifact.get("model")
+    if hasattr(model, "n_jobs"):
+        model.n_jobs = 1
+    return artifact
+
+
+def _predict_horizons(row: pd.DataFrame) -> tuple[list[tuple[int, float, float]], int | None]:
+    """Blocking — run via asyncio.to_thread. (horizon, wave, wind) for each
+    horizon in order; stops at the first horizon whose model is missing
+    and returns it as the second element (None when all were predicted).
+
+    Memory, not speed, is why models are loaded per call and dropped
+    before the next one is loaded, rather than all 7 cached for the
+    process lifetime: the resident set measured ~80MB on top of the rest
+    of the app, on Render free tier's 512MB. One ~8MB artifact loads in
+    ~10ms (after the first load's one-time sklearn import), so the extra
+    latency is small next to the Open-Meteo fetches this endpoint already
+    makes."""
+    preds: list[tuple[int, float, float]] = []
+    try:
+        for horizon in HORIZONS:
+            artifact = _load_horizon_model(horizon)
+            if artifact is None:
+                return preds, horizon
+            pred = artifact["model"].predict(row[artifact["features"]])[0]
+            preds.append((horizon, float(pred[0]), float(pred[1])))
+            del artifact
+        return preds, None
+    finally:
+        heavy_work.release_memory()
 
 
 async def get_forecast(lat: float, lon: float) -> dict[str, Any]:
@@ -134,23 +164,22 @@ async def get_forecast(lat: float, lon: float) -> dict[str, Any]:
             "sst_celsius": sst_day0, "air_temp_celsius": temp_day0,
         }])
 
+        preds, missing_horizon = await asyncio.to_thread(_predict_horizons, row)
+        if missing_horizon is not None:
+            return {
+                "lat": lat, "lon": lon, "status": "error",
+                "reason": f"forecast model for day+{missing_horizon} is not available (run backend/scripts/train_forecast_models.py)",
+                "forecast": [], "generated_at": _now_iso(),
+            }
+
         forecast: list[dict] = []
-        for horizon in HORIZONS:
-            artifact = _load_horizon_model(horizon)
-            if artifact is None:
-                return {
-                    "lat": lat, "lon": lon, "status": "error",
-                    "reason": f"forecast model for day+{horizon} is not available (run backend/scripts/train_forecast_models.py)",
-                    "forecast": [], "generated_at": _now_iso(),
-                }
-            model, features = artifact["model"], artifact["features"]
-            pred = model.predict(row[features])[0]
+        for horizon, wave_pred, wind_pred in preds:
             metrics = _load_metrics().get(f"day{horizon}", {})
             forecast.append({
                 "horizon": horizon,
                 "date": (day0_date + timedelta(days=horizon)).isoformat(),
-                "wave_height_m": round(float(pred[0]), 2),
-                "wind_kmh": round(float(pred[1]), 1),
+                "wave_height_m": round(wave_pred, 2),
+                "wind_kmh": round(wind_pred, 1),
                 # Same validation-set MAE train_forecast_models.py reported for
                 # this horizon — a real accuracy figure, not a guess, so the
                 # UI can show "typically ±X" alongside the prediction.
