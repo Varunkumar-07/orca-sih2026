@@ -205,7 +205,7 @@ export function ChatPanel({
         </button>
       </div>
       <div className="text-[11px] text-[#94a3b8] text-center px-3.5 pb-3">
-        Demo mode uses fixtures · Live mode calls the full LLM + deterministic pipeline via /query/full
+        Demo mode shows sample answers · Live mode uses real-time data and AI reasoning
       </div>
     </div>
   )

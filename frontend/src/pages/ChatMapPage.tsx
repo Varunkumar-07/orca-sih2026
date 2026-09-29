@@ -234,7 +234,7 @@ export default function ChatMapPage() {
             <span className={!demoMode ? 'text-amber-700 font-semibold' : 'text-[#0d0c0b]/50'}>Live</span>
           </label>
           <span className="hidden sm:inline text-[11px] text-[#0d0c0b]/50">
-            {demoMode ? 'Fixture-based · no API key needed' : 'Full LLM pipeline · /query/full'}
+            {demoMode ? 'Sample answers · works offline' : 'Live data and AI reasoning'}
           </span>
         </div>
       </div>
@@ -356,7 +356,7 @@ export default function ChatMapPage() {
       </div>
 
       <footer className="shrink-0 h-6 bg-slate-900/85 backdrop-blur text-slate-400 text-[11px] flex items-center justify-center px-4">
-        ORCA · Conversational multi-agent marine intelligence · Judged trace panel §6.5 · Coordinates (lat,lon) → GeoJSON (lon,lat) at visualization boundary
+        ORCA · Smart India Hackathon 2026 · Team NEXORA
       </footer>
     </div>
   )

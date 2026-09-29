@@ -48,9 +48,8 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 MODEL_DESCRIPTION = (
     "RandomForestRegressor (multi-output: wave height + wind speed), one model per "
     "forecast day, trained on ORCA's own ~4 years of Open-Meteo marine + weather "
-    "archive history across 11 coastal anchor points (see "
-    "backend/scripts/train_forecast_models.py) — not reused from any other project's "
-    "model, which would not generalize to these coordinates."
+    "archive history across 11 coastal anchor points — not reused from any other "
+    "project's model, which would not generalize to these coordinates."
 )
 
 _metrics_cache: dict[str, dict] | None = None
