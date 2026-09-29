@@ -58,6 +58,7 @@ function useScrollScrubbedVideo(
     let ready = false
     let started = false
     let attached = false
+    let wasHome = isHomeRef.current
     let raf = 0
 
     const clamp = (v: number, a: number, b: number) => (v < a ? a : v > b ? b : v)
@@ -172,6 +173,16 @@ function useScrollScrubbedVideo(
     }
 
     function frame() {
+      // Coming back to Home: the clip kept playing on the other page, so
+      // seekAt no longer matches where it really is, and Home's fresh
+      // scroller starts at the top. Re-sync both, or Home would show the
+      // frame playback stopped on and ignore scrolling until it passed the
+      // old position.
+      if (isHomeRef.current && !wasHome) {
+        readScroll(null)
+        seekAt = video!.currentTime
+      }
+      wasHome = isHomeRef.current
       // Scroll-scrubbing only drives the clip on Home — everywhere else it
       // just plays normally (see the separate play/pause effect below), so
       // forcing currentTime here would fight that native playback.

@@ -59,10 +59,14 @@ beforeEach(() => {
   // so no polyfill is needed; asserting that here would just be
   // re-testing jsdom itself.
   vi.stubGlobal('fetch', vi.fn())
+  // The Demo/Live choice persists in localStorage — start every test as a
+  // first-time visitor.
+  localStorage.clear()
 })
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 describe('ChatMapPage — initial render', () => {
@@ -226,5 +230,50 @@ describe('ChatMapPage — selectedZone resets on new map data', () => {
     // on something unique to the reply having actually landed instead.
     await waitFor(() => expect(screen.getByText(/confidence 90%/)).toBeInTheDocument())
     expect(screen.queryByText(/Selected PFZ:/)).not.toBeInTheDocument()
+  })
+})
+
+describe('ChatMapPage — remembers the Demo/Live choice', () => {
+  it('a first-time visitor starts on Demo', () => {
+    render(<ChatMapPage />)
+    expect(screen.getByText('Sample answers · works offline')).toBeInTheDocument()
+  })
+
+  it('choosing Live survives leaving and returning to the page', async () => {
+    const user = userEvent.setup()
+    const { unmount } = render(<ChatMapPage />)
+    await user.click(screen.getByRole('button', { name: /toggle demo\/live/i }))
+    unmount()
+
+    mockFetchOnce(finalResponse())
+    render(<ChatMapPage />)
+    expect(screen.getByText('Live data and AI reasoning')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /is it safe to go out tomorrow near Chennai/ }))
+    await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/query/full', expect.anything()))
+  })
+
+  it('switching back to Demo is remembered too', async () => {
+    localStorage.setItem('orca_assistant_mode', 'live')
+    const user = userEvent.setup()
+    const { unmount } = render(<ChatMapPage />)
+    await user.click(screen.getByRole('button', { name: /toggle demo\/live/i }))
+    unmount()
+
+    render(<ChatMapPage />)
+    expect(screen.getByText('Sample answers · works offline')).toBeInTheDocument()
+  })
+
+  it('blocked storage never breaks the page — it just starts on Demo', async () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('SecurityError')
+    })
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('SecurityError')
+    })
+    const user = userEvent.setup()
+    render(<ChatMapPage />)
+    expect(screen.getByText('Sample answers · works offline')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /toggle demo\/live/i }))
+    expect(screen.getByText('Live data and AI reasoning')).toBeInTheDocument()
   })
 })

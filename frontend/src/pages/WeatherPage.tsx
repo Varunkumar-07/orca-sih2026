@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from 'react'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { ForecastResponse, WeatherSnapshot, ZoneRecord } from '../types'
 import { ensureOk, friendlyError, devBackendHint } from '../lib/httpError'
+import { localIsoDate, localIsoDateDaysAgo } from '../lib/dates'
 
 // Layout — a single-zone live-conditions card, a real 7-day trend chart,
 // a "Run ML Forecast" button, and a separate visually-distinct ML section
@@ -33,10 +34,7 @@ async function fetchWeather(lat: number, lon: number): Promise<WeatherSnapshot> 
 }
 
 async function fetchTrend(lat: number, lon: number): Promise<{ date: string; value: number | null }[]> {
-  const end = new Date()
-  const start = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000)
-  const iso = (d: Date) => d.toISOString().slice(0, 10)
-  const res = await fetch(`/api/analytics/historical?lat=${lat}&lon=${lon}&start_date=${iso(start)}&end_date=${iso(end)}&variables=wave_height_m`)
+  const res = await fetch(`/api/analytics/historical?lat=${lat}&lon=${lon}&start_date=${localIsoDateDaysAgo(6)}&end_date=${localIsoDate()}&variables=wave_height_m`)
   await ensureOk(res)
   const data = await res.json()
   const series = data.series?.wave_height_m

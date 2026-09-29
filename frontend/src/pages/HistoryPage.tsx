@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { HistoryListResponse, HistoryRecordDetail, PageSource } from '../types'
 import { ensureOk, friendlyError, devBackendHint } from '../lib/httpError'
-
+import { localIsoDate, localIsoDateDaysAgo, localUtcOffsetMinutes } from '../lib/dates'
 const PAGE_SOURCES: PageSource[] = ['chat', 'zones', 'weather', 'route', 'alerts', 'analytics', 'download']
 
 const PAGE_SOURCE_STYLE: Record<PageSource, string> = {
@@ -21,14 +21,6 @@ const QUICK_RANGES = [
 ]
 
 const PAGE_SIZE = 10
-
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10)
-}
-
-function daysAgoIso(days: number): string {
-  return isoDate(new Date(Date.now() - days * 24 * 60 * 60 * 1000))
-}
 
 function HistoryDetailPanel({ record, onClose }: { record: HistoryRecordDetail; onClose: () => void }) {
   return (
@@ -71,8 +63,8 @@ function HistoryDetailPanel({ record, onClose }: { record: HistoryRecordDetail; 
 
 export function HistoryPage() {
   const [pageSource, setPageSource] = useState<PageSource | ''>('')
-  const [startDate, setStartDate] = useState(() => daysAgoIso(30))
-  const [endDate, setEndDate] = useState(() => isoDate(new Date()))
+  const [startDate, setStartDate] = useState(() => localIsoDateDaysAgo(30))
+  const [endDate, setEndDate] = useState(() => localIsoDate())
 
   const [offset, setOffset] = useState(0)
   const [data, setData] = useState<HistoryListResponse | null>(null)
@@ -99,6 +91,9 @@ export function HistoryPage() {
       end_date: endDate,
       limit: String(PAGE_SIZE),
       offset: String(offset),
+      // The dates above are the user's local calendar days; this tells the
+      // backend which timezone they are days in.
+      tz_offset_minutes: String(localUtcOffsetMinutes()),
     })
     if (pageSource) params.set('page_source', pageSource)
 
@@ -127,8 +122,8 @@ export function HistoryPage() {
   }
 
   function applyQuickRange(days: number) {
-    setStartDate(daysAgoIso(days))
-    setEndDate(isoDate(new Date()))
+    setStartDate(localIsoDateDaysAgo(days))
+    setEndDate(localIsoDate())
     setOffset(0)
   }
 

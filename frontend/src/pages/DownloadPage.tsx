@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ZoneRecord } from '../types'
 import { ensureOk, friendlyError, devBackendHint } from '../lib/httpError'
+import { localIsoDate, localIsoDateDaysAgo } from '../lib/dates'
 
 const VARIABLE_GROUPS: { title: string; variables: string[] }[] = [
   { title: 'Temperature', variables: ['sst_celsius', 'air_temp_celsius'] },
@@ -49,21 +50,13 @@ const QUICK_RANGES = [
   { label: '90 Days', days: 90 },
 ]
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10)
-}
-
-function daysAgoIso(days: number): string {
-  return isoDate(new Date(Date.now() - days * 24 * 60 * 60 * 1000))
-}
-
 export function DownloadPage() {
   const [zones, setZones] = useState<ZoneRecord[] | null>(null)
   const [zonesError, setZonesError] = useState<string | null>(null)
   const [zoneId, setZoneId] = useState('')
 
-  const [startDate, setStartDate] = useState(() => daysAgoIso(7))
-  const [endDate, setEndDate] = useState(() => isoDate(new Date()))
+  const [startDate, setStartDate] = useState(() => localIsoDateDaysAgo(7))
+  const [endDate, setEndDate] = useState(() => localIsoDate())
 
   const [selectedVars, setSelectedVars] = useState<Set<string>>(new Set(ALL_VARIABLES))
   const [format, setFormat] = useState<'csv' | 'json' | 'pdf' | 'docx'>('csv')
@@ -98,8 +91,8 @@ export function DownloadPage() {
   }
 
   function applyQuickRange(days: number) {
-    setStartDate(daysAgoIso(days))
-    setEndDate(isoDate(new Date()))
+    setStartDate(localIsoDateDaysAgo(days))
+    setEndDate(localIsoDate())
   }
 
   const canExport = Boolean(zoneId) && Boolean(startDate) && Boolean(endDate) && startDate <= endDate && selectedVars.size > 0

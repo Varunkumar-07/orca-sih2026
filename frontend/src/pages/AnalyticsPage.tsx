@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import type { AnalyticsResponse, AnalyticsSeries, ZoneRecord } from '../types'
 import { ensureOk, friendlyError, devBackendHint } from '../lib/httpError'
+import { localIsoDate, localIsoDateDaysAgo } from '../lib/dates'
 
 const RANGE_OPTIONS = [
   { label: '7 Days', days: 7 },
@@ -70,10 +71,6 @@ const COMPASS_POINTS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', '
 
 function compassPoint(deg: number): string {
   return COMPASS_POINTS[Math.round(deg / 22.5) % 16]
-}
-
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10)
 }
 
 function ChartCard({ variable, series }: { variable: string; series: AnalyticsSeries }) {
@@ -218,11 +215,7 @@ export function AnalyticsPage() {
     // the first zone's response has come back) — without this, whichever
     // response resolves last wins regardless of which selection is current.
     let cancelled = false
-    const end = new Date()
-    const start = new Date()
-    start.setDate(start.getDate() - rangeDays)
-
-    fetch(`/api/analytics/historical?lat=${lat}&lon=${lon}&start_date=${isoDate(start)}&end_date=${isoDate(end)}`)
+    fetch(`/api/analytics/historical?lat=${lat}&lon=${lon}&start_date=${localIsoDateDaysAgo(rangeDays)}&end_date=${localIsoDate()}`)
       .then(ensureOk)
       .then((res) => res.json() as Promise<AnalyticsResponse>)
       .then((d) => {

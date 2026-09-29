@@ -7,6 +7,8 @@ import { ensureOk, friendlyError, devBackendHint } from '../lib/httpError'
 
 type Message = { role: 'user' | 'orca'; text: string }
 
+const MODE_STORAGE_KEY = 'orca_assistant_mode'
+
 
 
 export default function ChatMapPage() {
@@ -19,7 +21,22 @@ export default function ChatMapPage() {
   const [selectedZone, setSelectedZone] = useState<string | null>(null)
   const [detectedLanguage, setDetectedLanguage] = useState<string | null>(null)
   const [responseLanguage, setResponseLanguage] = useState<string | null>(null)
-  const [demoMode, setDemoMode] = useState(true)
+  // The last Demo/Live choice is remembered across visits (localStorage);
+  // a first-time visitor — or blocked storage — still starts on Demo.
+  const [demoMode, setDemoMode] = useState(() => {
+    try {
+      return localStorage.getItem(MODE_STORAGE_KEY) !== 'live'
+    } catch {
+      return true
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(MODE_STORAGE_KEY, demoMode ? 'demo' : 'live')
+    } catch {
+      // Private browsing / blocked storage — the toggle still works for this visit.
+    }
+  }, [demoMode])
   const [error, setError] = useState<string | null>(null)
   // Persisted to sessionStorage (not component state alone) so navigating
   // to another page and back to Assistant doesn't silently start a brand
