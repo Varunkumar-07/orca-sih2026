@@ -290,6 +290,30 @@ def _restricted_area_at(lat: float, lon: float) -> dict | None:
     return None
 
 
+def restricted_area_mask(lats: np.ndarray, lons: np.ndarray) -> np.ndarray:
+    """Boolean (lat x lon) mask of the grid points that lie inside a
+    restricted area's extent — the same boundary-inclusive test as
+    _restricted_area_at (a point there gets a PROHIBITED verdict and route
+    planning refuses it), vectorized over a whole grid. Areas whose bounds
+    miss the grid are skipped before any per-point test."""
+    import shapely
+
+    mask = np.zeros((len(lats), len(lons)), dtype=bool)
+    if mask.size == 0:
+        return mask
+    lat_grid, lon_grid = np.meshgrid(lats, lons, indexing="ij")
+    lat_lo, lat_hi = float(np.min(lats)), float(np.max(lats))
+    lon_lo, lon_hi = float(np.min(lons)), float(np.max(lons))
+    for area in _get_restricted_areas():
+        poly = area["polygon"]
+        min_lon, min_lat, max_lon, max_lat = poly.bounds
+        if max_lon < lon_lo or min_lon > lon_hi or max_lat < lat_lo or min_lat > lat_hi:
+            continue
+        # intersects_xy is 'covers' for a point: boundary points count.
+        mask |= shapely.intersects_xy(poly, lon_grid, lat_grid)
+    return mask
+
+
 def _check_restricted(lat: float, lon: float) -> tuple[bool, str | None]:
     """Return (inside, area_name) for restricted-area containment."""
     area = _restricted_area_at(lat, lon)

@@ -41,6 +41,7 @@ import asyncio
 import types
 
 import httpx
+import numpy as np
 
 from backend.agents.reasoning import marine_data_agent as mda
 from backend.schemas.contracts import GeoPoint
@@ -228,8 +229,15 @@ def test_run_marine_data_agent_errors_when_no_live_zones_available(monkeypatch):
 # --- Zones Explorer live PFZ front detection --------------------------------
 
 
+def _fake_grid():
+    """Just what _live_zones_for_anchor reads off a grid itself — the pass
+    date, plus coordinates for its protected-area mask (find_pfz_candidates
+    is patched in these tests)."""
+    return types.SimpleNamespace(satellite_date="2026-09-12", lats=np.array([13.0, 13.5]), lons=np.array([80.3, 80.6]))
+
+
 def test_live_zones_for_anchor_returns_real_ids_when_grid_available(monkeypatch):
-    fake_grid = types.SimpleNamespace(satellite_date="2026-09-12")
+    fake_grid = _fake_grid()
     monkeypatch.setattr(mda, "fetch_environmental_grid", _async_return(fake_grid))
     candidates = [
         PFZCandidate(lat=13.2, lon=80.4, sst_celsius=28.9, chlorophyll_mg_m3=0.55, score=0.8),
@@ -274,7 +282,7 @@ def test_live_zones_for_anchor_empty_when_no_candidates_found(monkeypatch):
     """A live grid with no detectable front is a legitimate "nothing today"
     result (see test_pfz_service.py's flat-region test), not an error — but
     with no mock fallback, that anchor simply contributes zero zones."""
-    monkeypatch.setattr(mda, "fetch_environmental_grid", _async_return(object()))
+    monkeypatch.setattr(mda, "fetch_environmental_grid", _async_return(_fake_grid()))
     monkeypatch.setattr(mda, "find_pfz_candidates", lambda grid, **_k: [])
 
     zones = asyncio.run(mda._live_zones_for_anchor(_CHENNAI, asyncio.Semaphore(4)))
@@ -283,7 +291,7 @@ def test_live_zones_for_anchor_empty_when_no_candidates_found(monkeypatch):
 
 
 def test_list_live_pfz_zones_combines_multiple_anchors_with_near_tag(monkeypatch):
-    fake_grid = types.SimpleNamespace(satellite_date="2026-09-12")
+    fake_grid = _fake_grid()
     monkeypatch.setattr(mda, "fetch_environmental_grid", _async_return(fake_grid))
     monkeypatch.setattr(
         mda,

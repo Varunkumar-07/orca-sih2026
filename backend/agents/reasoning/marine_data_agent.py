@@ -43,7 +43,7 @@ import logging
 import copernicusmarine
 import numpy as np
 
-from backend.agents.deterministic.geospatial import haversine_km
+from backend.agents.deterministic.geospatial import haversine_km, restricted_area_mask
 from backend.agents.reasoning._groq_client import call_groq_json
 from backend.agents.reasoning._trace import record_trace
 from backend.error_utils import describe_exception
@@ -387,7 +387,12 @@ async def _live_zones_for_anchor(
                 sources=sources,
             )
         if grid is not None:
-            candidates = find_pfz_candidates(grid, max_zones=3, min_separation_km=15.0)
+            # Never suggest fishing inside a protected area: those cells are
+            # masked out before ranking, so the next-best front outside
+            # takes the slot, and zone numbers below stay gap-free.
+            candidates = find_pfz_candidates(
+                grid, max_zones=3, min_separation_km=15.0, excluded=restricted_area_mask(grid.lats, grid.lons)
+            )
             if candidates:
                 return [
                     {

@@ -32,6 +32,13 @@ unconditionally (no proximity filter to the query location) — factored out
 once and reused across scenarios instead of duplicating it 4x. The Gulf of
 Mannar scenario re-derives its own overlays list from that constant only to
 flip `highlighted` on the zone the query falls inside.
+
+Edited after capture (2026-09-29): the Gulf of Mannar scenario's original
+PFZ-MOCK-001 (9.23N 79.21E) sat inside the Gulf of Mannar Marine Biosphere
+Reserve — a fishing zone suggested where fishing is banned. It was removed
+and the other two renumbered 001-002, with the counts, nearest-zone trace
+lines and answer_len updated to match — the same rule live detection now
+applies (see find_pfz_candidates' `excluded`).
 """
 
 from backend.schemas.contracts import FinalResponse
@@ -1466,8 +1473,7 @@ SNAPSHOT_GULF_OF_MANNAR_RESTRICTED = FinalResponse.model_validate(
  'Safety: RESTRICTED — Not permitted (overrides: Safe to go (confidence 95%) — Wind and wave '
  'conditions are well below hazardous thresholds and no alerts are active, indicating it is '
  'safe to go out.)\n'
- 'Marine: SST 28.6°C; chlorophyll 0.42 mg/m³; PFZ zones: PFZ-MOCK-001, PFZ-MOCK-002, '
- 'PFZ-MOCK-003.\n'
+ 'Marine: SST 28.6°C; chlorophyll 0.42 mg/m³; PFZ zones: PFZ-MOCK-001, PFZ-MOCK-002.\n'
  'Weather: wind 16.0 km/h; wave height 1.0 m; No active cyclone/lightning alerts; Tide info: '
  "{'high_tide': '13:45', 'low_tide': '07:20'}.\n"
  'Geospatial: Inside Gulf of Mannar Marine Biosphere Reserve — fishing is prohibited regardless '
@@ -1478,7 +1484,7 @@ SNAPSHOT_GULF_OF_MANNAR_RESTRICTED = FinalResponse.model_validate(
  'Refer to official marine park regulations.'),
       'reasoning_trace': [{'agent_name': 'marine_data_agent',
   'input_summary': "query='can I fish near Gulf of Mannar?', location=lat=9.15 lon=79.15",
-  'output_summary': 'intent=pfz, 3 candidate zones, nearest=PFZ-MOCK-001 at 11.1km',
+  'output_summary': 'intent=pfz, 2 candidate zones, nearest=PFZ-MOCK-001 at 31.4km',
   'timestamp': '2026-09-07T12:23:04Z'},
  {'agent_name': 'weather_agent',
   'input_summary': "query='can I fish near Gulf of Mannar?', location=lat=9.15 lon=79.15",
@@ -1496,40 +1502,30 @@ SNAPSHOT_GULF_OF_MANNAR_RESTRICTED = FinalResponse.model_validate(
                     'marine.status=ok, weather.status=ok, risk.status=ok',
   'timestamp': '2026-09-07T12:23:06Z'},
  {'agent_name': 'ocean_analytics',
-  'input_summary': 'sst=28.6, chl=0.42, status=ok, pfz_zones=3',
+  'input_summary': 'sst=28.6, chl=0.42, status=ok, pfz_zones=2',
   'output_summary': "anomalies=0, trend='Conditions favorable: SST 28.6°C and chlorophyll 0.42 "
                     "mg/m³ within optimal fishing thresholds (SST 27.0-29.5°C, chl 0.2-'",
   'timestamp': '2026-09-07T12:23:06.171942Z'},
  {'agent_name': 'geospatial',
-  'input_summary': 'location=(9.1500,79.1500), pfz_zones=3',
-  'output_summary': 'nearest=PFZ-MOCK-001, dist=11.07km, inside_restricted=True (Gulf of Mannar '
+  'input_summary': 'location=(9.1500,79.1500), pfz_zones=2',
+  'output_summary': 'nearest=PFZ-MOCK-001, dist=31.36km, inside_restricted=True (Gulf of Mannar '
                     'Marine Biosphere Reserve)',
   'timestamp': '2026-09-07T12:23:06.173644Z'},
  {'agent_name': 'reporting',
   'input_summary': "query='can I fish near Gulf of Mannar?', marine:ok, weather:ok, risk:ok, "
                    'analytics:0 anomalies, geospatial:inside=True',
-  'output_summary': 'answer_len=1147, pins=4, overlays=13',
+  'output_summary': 'answer_len=1133, pins=3, overlays=12',
   'timestamp': '2026-09-07T12:23:06.175166Z'},
  {'agent_name': 'visualization',
-  'input_summary': 'loc=(9.15,79.15), pfz_zones=3, inside_restricted=True',
-  'output_summary': 'pins=4, overlays=13',
+  'input_summary': 'loc=(9.15,79.15), pfz_zones=2, inside_restricted=True',
+  'output_summary': 'pins=3, overlays=12',
   'timestamp': '2026-09-07T12:23:06.179254Z'}],
       'map_payload': {'pins': [{'lat': 9.15, 'lon': 79.15, 'label': 'Query location', 'type': 'query'},
- {'lat': 9.23,
-  'lon': 79.21000000000001,
+ {'lat': 9.33,
+  'lon': 79.37,
   'label': 'PFZ-MOCK-001',
   'type': 'pfz',
   'zone_id': 'PFZ-MOCK-001',
-  'center': {'lat': 9.23, 'lon': 79.21000000000001},
-  'distance_km': 11.1,
-  'sst_celsius': 28.9,
-  'chlorophyll_mg_m3': 0.55,
-  'advisory': 'Potential fishing zone, favorable chlorophyll concentration (sample data)'},
- {'lat': 9.33,
-  'lon': 79.37,
-  'label': 'PFZ-MOCK-002',
-  'type': 'pfz',
-  'zone_id': 'PFZ-MOCK-002',
   'center': {'lat': 9.33, 'lon': 79.37},
   'distance_km': 31.4,
   'sst_celsius': 28.6,
@@ -1537,9 +1533,9 @@ SNAPSHOT_GULF_OF_MANNAR_RESTRICTED = FinalResponse.model_validate(
   'advisory': 'Potential fishing zone, moderate chlorophyll concentration (sample data)'},
  {'lat': 9.450000000000001,
   'lon': 79.4,
-  'label': 'PFZ-MOCK-003',
+  'label': 'PFZ-MOCK-002',
   'type': 'pfz',
-  'zone_id': 'PFZ-MOCK-003',
+  'zone_id': 'PFZ-MOCK-002',
   'center': {'lat': 9.450000000000001, 'lon': 79.4},
   'distance_km': 43.2,
   'sst_celsius': 27.8,
@@ -1550,26 +1546,17 @@ SNAPSHOT_GULF_OF_MANNAR_RESTRICTED = FinalResponse.model_validate(
         for o in _REAL_RESTRICTED_OVERLAYS
     ] + [{'type': 'pfz_zone',
   'name': 'PFZ-MOCK-001',
-  'geojson': {'type': 'Point', 'coordinates': [79.21000000000001, 9.23]},
-  'zone_id': 'PFZ-MOCK-001',
-  'center': {'lat': 9.23, 'lon': 79.21000000000001},
-  'distance_km': 11.1,
-  'sst_celsius': 28.9,
-  'chlorophyll_mg_m3': 0.55,
-  'advisory': 'Potential fishing zone, favorable chlorophyll concentration (sample data)'},
- {'type': 'pfz_zone',
-  'name': 'PFZ-MOCK-002',
   'geojson': {'type': 'Point', 'coordinates': [79.37, 9.33]},
-  'zone_id': 'PFZ-MOCK-002',
+  'zone_id': 'PFZ-MOCK-001',
   'center': {'lat': 9.33, 'lon': 79.37},
   'distance_km': 31.4,
   'sst_celsius': 28.6,
   'chlorophyll_mg_m3': 0.42,
   'advisory': 'Potential fishing zone, moderate chlorophyll concentration (sample data)'},
  {'type': 'pfz_zone',
-  'name': 'PFZ-MOCK-003',
+  'name': 'PFZ-MOCK-002',
   'geojson': {'type': 'Point', 'coordinates': [79.4, 9.450000000000001]},
-  'zone_id': 'PFZ-MOCK-003',
+  'zone_id': 'PFZ-MOCK-002',
   'center': {'lat': 9.450000000000001, 'lon': 79.4},
   'distance_km': 43.2,
   'sst_celsius': 27.8,

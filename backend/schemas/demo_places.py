@@ -9,6 +9,11 @@ GET /zones catalog on 2026-09-29 (satellite pass 2026-09-28), up to 3 per
 anchor city (the same anchors pfz_service.py scans), keyed by anchor name as
 it appears in planning_agent._KNOWN_LOCATIONS. Sample data for an offline
 demo — never presented by live mode.
+
+Like live detection, no zone lies inside a protected area's extent: the
+Gulf of Mannar set was re-derived from the same pass with those cells
+masked out (the old PFZ-002 sat inside the Gulf of Mannar reserve), so its
+IDs run 001-003 in rank order. tests/test_zone_protected_areas.py guards this.
 """
 
 DEMO_SAMPLE_PFZ_BY_ANCHOR: dict[str, list[dict]] = {
@@ -44,8 +49,8 @@ DEMO_SAMPLE_PFZ_BY_ANCHOR: dict[str, list[dict]] = {
     ],
     "gulf of mannar": [
         {"zone_id": "GULF-OF-MANNAR-PFZ-001", "center": {"lat": 8.9375, "lon": 79.3542}},
-        {"zone_id": "GULF-OF-MANNAR-PFZ-002", "center": {"lat": 8.7708, "lon": 79.1042}},
-        {"zone_id": "GULF-OF-MANNAR-PFZ-003", "center": {"lat": 8.8125, "lon": 79.2708}},
+        {"zone_id": "GULF-OF-MANNAR-PFZ-002", "center": {"lat": 8.8125, "lon": 79.2708}},
+        {"zone_id": "GULF-OF-MANNAR-PFZ-003", "center": {"lat": 8.4375, "lon": 79.7708}},
     ],
     "visakhapatnam": [
         {"zone_id": "VISAKHAPATNAM-PFZ-001", "center": {"lat": 17.4792, "lon": 83.1875}},

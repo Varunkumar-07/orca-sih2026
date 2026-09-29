@@ -404,7 +404,9 @@ def _grid_distance_km(lats: np.ndarray, lons: np.ndarray, center_lat: float, cen
     return EARTH_RADIUS_KM * 2 * np.arcsin(np.sqrt(a))
 
 
-def find_pfz_candidates(grid: EnvironmentalGrid, max_zones: int = 3, min_separation_km: float = 15.0) -> list[PFZCandidate]:
+def find_pfz_candidates(
+    grid: EnvironmentalGrid, max_zones: int = 3, min_separation_km: float = 15.0, excluded: np.ndarray | None = None
+) -> list[PFZCandidate]:
     """Detect real candidate fishing zones from a real SST+chlorophyll
     grid: score every cell by (SST front strength) x (chlorophyll front
     strength) x (SST favorability) x (chlorophyll favorability), so a cell
@@ -423,6 +425,13 @@ def find_pfz_candidates(grid: EnvironmentalGrid, max_zones: int = 3, min_separat
     land carry NaN gradients (central-difference touches its neighbor) and
     naturally get excluded too, without needing a separate elevation/land
     check.
+
+    `excluded` (same shape as the grid, True = never pick) removes cells
+    the same way — the live caller passes geospatial.restricted_area_mask,
+    so a zone is never placed inside a protected area. Excluded cells are
+    dropped before ranking, not after: they can't be picked and they don't
+    suppress their neighbours, so the next-best permitted front takes the
+    freed slot instead of the anchor just losing a zone.
     """
     if grid.sst_celsius.shape != grid.chlorophyll_mg_m3.shape:
         raise ValueError("sst/chlorophyll grids must already be aligned to the same shape")
@@ -440,6 +449,8 @@ def find_pfz_candidates(grid: EnvironmentalGrid, max_zones: int = 3, min_separat
 
     score = _normalize(sst_front) * _normalize(chl_front) * _sst_favorability(grid.sst_celsius) * _chl_favorability(grid.chlorophyll_mg_m3)
     score = np.where(np.isnan(grid.sst_celsius) | np.isnan(grid.chlorophyll_mg_m3), np.nan, score)
+    if excluded is not None:
+        score[excluded] = np.nan
 
     candidates: list[PFZCandidate] = []
     working = score.copy()
