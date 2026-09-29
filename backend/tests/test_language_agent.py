@@ -349,3 +349,24 @@ def test_post_json_gives_up_after_two_failures(monkeypatch):
 
     assert result is None
     assert attempts["n"] == 2
+
+
+def test_translated_answer_keeps_its_verdict_icon(monkeypatch):
+    """Bhashini drops the leading ✅/⚠️/❓/⛔; the chat UI's verdict card is
+    keyed off it, so it must be put back on the same (headline) line."""
+    sent: list[str] = []
+
+    def fake_translate(text, source, target):
+        sent.append(text)
+        return "\n".join(f"[{target}] {line}" for line in text.split("\n")), True
+
+    monkeypatch.setattr(la, "translate", fake_translate)
+    answer = "Query: q\nLocation: 13.0800, 80.2700\n⚠️ Not safe to go (confidence 95%)\nWeather: wind 62 km/h"
+
+    text, lang = la.translate_output_from_english(answer, "ta")
+
+    assert lang == "ta"
+    lines = text.split("\n")
+    assert lines[2] == "⚠️ [ta] Not safe to go (confidence 95%)"
+    assert "⚠️" not in sent[0], "the icon itself must not be sent for translation"
+    assert len(lines) == 4

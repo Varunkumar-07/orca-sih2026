@@ -66,6 +66,13 @@ class GeospatialResult(BaseModel):
     distance_km: float | None
     inside_restricted_area: bool
     restricted_area_name: str | None = None
+    # True when the containing area's extent is WDPA's reported-area circle
+    # for a point-only site, not a surveyed boundary.
+    restricted_area_approximate: bool = False
+    # Proximity warning only (never a ban): the closest protected area
+    # within geospatial.MPA_PROXIMITY_KM, when not inside any.
+    near_restricted_area_name: str | None = None
+    near_restricted_area_km: float | None = None
 
 
 class TraceStep(BaseModel):

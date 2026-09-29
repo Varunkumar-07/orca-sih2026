@@ -30,7 +30,9 @@ client = TestClient(app)
 # lands here.
 _QUERY_LOCATION = {"lat": 13.08, "lon": 80.27}
 _DESTINATION = {"lat": 13.20, "lon": 80.40}
-_USER_LOCATION = {"lat": 12.90, "lon": 80.10}
+# At sea off Chennai (a phone on a boat) — a point on land would be moved
+# to the nearest open water before routing, which isn't what this tests.
+_USER_LOCATION = {"lat": 12.90, "lon": 80.30}
 
 
 def _route_start(response_json: dict) -> dict:

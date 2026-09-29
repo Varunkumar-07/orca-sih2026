@@ -7,7 +7,8 @@
       "marine": true
     },
     "fetched_at": "2026-08-26T14:05:26Z",
-    "feature_count": 10
+    "feature_count": 10,
+    "reported_area_backfilled_at": "2026-09-29T17:35:24Z"
   },
   "features": [
     {
@@ -28,7 +29,8 @@
           "name": "Not Applicable"
         },
         "marine": true,
-        "source": "protectedplanet.net WDPA API v4"
+        "source": "protectedplanet.net WDPA API v4",
+        "reported_area_km2": 1330.1
       },
       "geometry": {
         "type": "Polygon",
@@ -376,7 +378,8 @@
           "name": "Not Reported"
         },
         "marine": true,
-        "source": "protectedplanet.net WDPA API v4"
+        "source": "protectedplanet.net WDPA API v4",
+        "reported_area_km2": 1165.0
       },
       "geometry": {
         "type": "Polygon",
@@ -520,7 +523,8 @@
           "name": "Ia"
         },
         "marine": true,
-        "source": "protectedplanet.net WDPA API v4"
+        "source": "protectedplanet.net WDPA API v4",
+        "reported_area_km2": 4230.0
       },
       "geometry": {
         "type": "Polygon",
@@ -1208,7 +1212,8 @@
           "name": "Not Reported"
         },
         "marine": true,
-        "source": "protectedplanet.net WDPA API v4"
+        "source": "protectedplanet.net WDPA API v4",
+        "reported_area_km2": 526.71876
       },
       "geometry": {
         "type": "MultiPolygon",
@@ -1386,7 +1391,8 @@
           "name": "V"
         },
         "marine": true,
-        "source": "protectedplanet.net WDPA API v4"
+        "source": "protectedplanet.net WDPA API v4",
+        "reported_area_km2": 14.78642
       },
       "geometry": {
         "type": "Polygon",
@@ -1462,7 +1468,8 @@
           "name": "Not Reported"
         },
         "marine": true,
-        "source": "protectedplanet.net WDPA API v4"
+        "source": "protectedplanet.net WDPA API v4",
+        "reported_area_km2": 65.2108
       },
       "geometry": {
         "type": "Polygon",
@@ -1730,7 +1737,8 @@
           "name": "Not Applicable"
         },
         "marine": true,
-        "source": "protectedplanet.net WDPA API v4"
+        "source": "protectedplanet.net WDPA API v4",
+        "reported_area_km2": 10500.0
       },
       "geometry": {
         "type": "Point",
@@ -1758,7 +1766,8 @@
           "name": "Not Applicable"
         },
         "marine": true,
-        "source": "protectedplanet.net WDPA API v4"
+        "source": "protectedplanet.net WDPA API v4",
+        "reported_area_km2": 9630.0
       },
       "geometry": {
         "type": "Point",
@@ -1786,7 +1795,8 @@
           "name": "Not Reported"
         },
         "marine": true,
-        "source": "protectedplanet.net WDPA API v4"
+        "source": "protectedplanet.net WDPA API v4",
+        "reported_area_km2": 614.0
       },
       "geometry": {
         "type": "Point",
@@ -1814,7 +1824,8 @@
           "name": "Not Reported"
         },
         "marine": true,
-        "source": "protectedplanet.net WDPA API v4"
+        "source": "protectedplanet.net WDPA API v4",
+        "reported_area_km2": 385.0
       },
       "geometry": {
         "type": "Point",

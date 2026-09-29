@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 from backend.agents.deterministic.analytics import run_ocean_analytics
 from backend.agents.deterministic.geospatial import (
     get_active_restricted_areas,
+    haversine_km,
     run_geospatial,
 )
 from backend.agents.deterministic.reporting import run_reporting
@@ -37,8 +38,13 @@ from backend.agents.reasoning.language_agent import (
     translate_input_to_english,
     translate_output_from_english,
 )
-from backend.agents.reasoning.navigation_agent import find_route
-from backend.agents.reasoning.planning_agent import run_planning_agent
+from backend.agents.reasoning.navigation_agent import plan_route
+from backend.agents.reasoning.planning_agent import (
+    _KNOWN_LOCATIONS,
+    _location_from_latlon,
+    _scan_known_locations_in_text,
+    run_planning_agent,
+)
 from backend.agents.reasoning.user_interaction_agent import (
     create_session,
     get_session,
@@ -51,6 +57,7 @@ from backend.schemas.contracts import (
     MapPayload,
     TraceStep,
 )
+from backend.schemas.demo_places import DEMO_SAMPLE_PFZ_BY_ANCHOR
 from backend.schemas.demo_snapshot import DEMO_SNAPSHOTS
 from backend.schemas.test_fixtures import (
     FIXTURE_1_HAPPY_PATH,
@@ -183,16 +190,18 @@ def _run_deterministic_pipeline(
             # already used for this bundle — the route can never drift from
             # what determined inside_restricted_area.
             restricted_zones = get_active_restricted_areas()
-            route_points = find_route(start, destination, restricted_zones)
+            result = plan_route(start, destination, restricted_zones)
 
             now = _now_iso()
-            if route_points is not None:
-                final.map_payload.route = [GeoPoint(lat=p["lat"], lon=p["lon"]) for p in route_points]
-                nav_summary = f"route found, {len(route_points)} waypoints"
+            if result.route is not None:
+                final.map_payload.route = [GeoPoint(lat=p["lat"], lon=p["lon"]) for p in result.route]
+                nav_summary = f"route found, {len(result.route)} waypoints"
+                if result.start_offset_km:
+                    nav_summary += f"; starts at open water {result.start_offset_km} km from your position"
             else:
                 # Graceful degradation: leave route as None (its default) —
                 # never break the response over an unreachable destination.
-                nav_summary = "no route found (destination unreachable or inside a restricted zone)"
+                nav_summary = f"no route found — {result.reason}"
 
             bundle.trace.append(
                 TraceStep(
@@ -209,18 +218,76 @@ def _run_deterministic_pipeline(
     return final
 
 
+# A demo question naming a place farther than this from the chosen
+# fixture's own location is moved to that place (see _fixture_for_query).
+_DEMO_RELOCATE_KM = 25.0
+# Sample PFZ zones are only borrowed from an anchor city this close to the
+# asked-about place; farther than that, the demo shows no fishing zone
+# rather than one that isn't near the question.
+_DEMO_SAMPLE_PFZ_MAX_KM = 150.0
+
+
+def _demo_place(query: str) -> tuple[str | None, GeoPoint | None]:
+    """(place name, point) the question names — explicit lat/lon or a
+    known coastal place, matched locally (demo mode makes no LLM call)."""
+    point = _location_from_latlon(query)
+    if point is not None:
+        return None, point
+    place = _scan_known_locations_in_text(query)
+    return (place, _KNOWN_LOCATIONS[place]) if place else (None, None)
+
+
+def _demo_sample_zones(point: GeoPoint) -> list[dict]:
+    """The captured sample PFZ zones of the nearest anchor city (see
+    demo_places.py), if one is within _DEMO_SAMPLE_PFZ_MAX_KM."""
+    best: tuple[float, str] | None = None
+    for anchor in DEMO_SAMPLE_PFZ_BY_ANCHOR:
+        anchor_point = _KNOWN_LOCATIONS.get(anchor)
+        if anchor_point is None:
+            continue
+        km = haversine_km(point.lat, point.lon, anchor_point.lat, anchor_point.lon)
+        if best is None or km < best[0]:
+            best = (km, anchor)
+    if best is None or best[0] > _DEMO_SAMPLE_PFZ_MAX_KM:
+        return []
+    return [dict(zone, center=dict(zone["center"])) for zone in DEMO_SAMPLE_PFZ_BY_ANCHOR[best[1]]]
+
+
 def _fixture_for_query(query: str) -> EvidenceBundle:
-    """Offline/demo fixture matching — used when GROQ_API_KEY is missing or for quick demo."""
+    """Offline/demo answer: a scenario fixture picked by keyword (restricted
+    area / hazard / partial data / happy path), then made to match the
+    question actually asked — its text is echoed, and if it names a place
+    other than the fixture's own (the fixtures are set at Chennai and the
+    Gulf of Mannar), the scenario is moved there with that area's sample
+    fishing zones. The weather/risk scenario stays the sample one."""
     q = query.lower()
     if "gulf of mannar" in q or "mannar" in q:
-        return FIXTURE_4_RESTRICTED_ZONE.model_copy(deep=True)
-    if "cyclone" in q or "hazard" in q or "storm" in q:
-        return FIXTURE_2_HAZARD_PATH.model_copy(deep=True)
-    if "imd" in q or "partial" in q or "unreachable" in q:
-        return FIXTURE_3_PARTIAL_FAILURE.model_copy(deep=True)
-    # default happy path, but patch query_text to echo user query
-    base = FIXTURE_1_HAPPY_PATH.model_copy(deep=True)
+        base = FIXTURE_4_RESTRICTED_ZONE.model_copy(deep=True)
+    elif "cyclone" in q or "hazard" in q or "storm" in q:
+        base = FIXTURE_2_HAZARD_PATH.model_copy(deep=True)
+    elif "imd" in q or "partial" in q or "unreachable" in q:
+        base = FIXTURE_3_PARTIAL_FAILURE.model_copy(deep=True)
+    else:
+        base = FIXTURE_1_HAPPY_PATH.model_copy(deep=True)
     base.query_text = query
+
+    _place, point = _demo_place(query)
+    fixture_point = base.query_location
+    if point is not None and (
+        fixture_point is None
+        or haversine_km(point.lat, point.lon, fixture_point.lat, fixture_point.lon) > _DEMO_RELOCATE_KM
+    ):
+        base.query_location = point
+    # The fixtures share one set of Chennai sample zones — swap in the
+    # asked-about area's own whenever those aren't anywhere near it.
+    loc = base.query_location
+    if loc is not None and base.marine is not None:
+        zones_nearby = any(
+            haversine_km(loc.lat, loc.lon, z["center"]["lat"], z["center"]["lon"]) <= _DEMO_SAMPLE_PFZ_MAX_KM
+            for z in base.marine.pfz_zones
+        )
+        if not zones_nearby:
+            base.marine.pfz_zones = _demo_sample_zones(loc)
     return base
 
 

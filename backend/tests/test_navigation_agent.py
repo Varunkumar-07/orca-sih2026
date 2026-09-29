@@ -11,7 +11,16 @@ obstacle grid:
 restricted_zones are built directly as [{"name": ..., "polygon": Shapely
 Polygon}, ...] — the same shape geospatial.get_active_restricted_areas()
 returns — rather than depending on the real WDPA cache, so these tests are
-self-contained and don't depend on network/data-fetch state.
+self-contained and don't depend on network/data-fetch state. The three
+obstacle-logic cases pass land=None (their coordinates are abstract "open
+water", not real geography); land handling has its own cases below, with a
+synthetic land polygon plus one check against the real coastline:
+  4. A land mass between start and destination is routed around.
+  5. A start on land is moved to the nearest open water, reported in km.
+  6. A start inside a protected area's actual extent is refused with a
+     reason; one merely within the routing clearance is not.
+  7. No sea route at all -> None with a plain reason, never a line on land.
+  8. Real coastline: Chennai to the Gulf of Mannar never touches land.
 
 Run from project root:  PYTHONPATH=. pytest   or   pytest
 """
@@ -19,10 +28,10 @@ from __future__ import annotations
 
 from itertools import pairwise
 
-from shapely.geometry import Point, Polygon
+from shapely.geometry import LineString, Point, Polygon
 
 from backend.agents.deterministic.geospatial import haversine_km
-from backend.agents.reasoning.navigation_agent import find_route
+from backend.agents.reasoning.navigation_agent import find_route, plan_route
 
 
 def _zone(name: str, polygon: Polygon) -> dict:
@@ -45,7 +54,7 @@ def test_find_route__open_water_no_obstacles():
     start = {"lat": 9.0, "lon": 78.5}
     destination = {"lat": 9.5, "lon": 79.0}
 
-    route = find_route(start, destination, restricted_zones=[])
+    route = find_route(start, destination, restricted_zones=[], land=None)
 
     assert route is not None
     assert len(route) >= 2
@@ -81,7 +90,7 @@ def test_find_route__detours_around_zone_between_start_and_destination():
         Polygon([(79.4, 8.85), (79.6, 8.85), (79.6, 9.15), (79.4, 9.15)]),  # (lon, lat) — Shapely order
     )
 
-    route = find_route(start, destination, restricted_zones=[blocking_zone])
+    route = find_route(start, destination, restricted_zones=[blocking_zone], land=None)
 
     assert route is not None, "a route should still exist by detouring north or south"
 
@@ -120,6 +129,84 @@ def test_find_route__destination_fully_enclosed_returns_none():
     # considered inside the ring itself (it's in the hole)
     assert not enclosing_ring["polygon"].covers(Point(destination["lon"], destination["lat"]))
 
-    route = find_route(start, destination, restricted_zones=[enclosing_ring])
+    route = find_route(start, destination, restricted_zones=[enclosing_ring], land=None)
 
     assert route is None, "destination fully enclosed by a restricted zone must be unreachable"
+
+
+# ---------------------------------------------------------------------------
+# Cases 4-8 — land
+# ---------------------------------------------------------------------------
+
+# A rectangular "island" squarely between (9.0, 78.5) and (9.0, 80.5).
+_ISLAND = Polygon([(79.3, 8.7), (79.7, 8.7), (79.7, 9.3), (79.3, 9.3)])
+
+
+def test_plan_route__detours_around_land():
+    start, destination = {"lat": 9.0, "lon": 78.5}, {"lat": 9.0, "lon": 80.5}
+
+    result = plan_route(start, destination, restricted_zones=[], land=_ISLAND)
+
+    assert result.route is not None
+    line = LineString([(p["lon"], p["lat"]) for p in result.route])
+    assert not line.intersects(_ISLAND), "route crosses land"
+    assert _route_length_km(result.route) > haversine_km(9.0, 78.5, 9.0, 80.5)
+
+
+def test_plan_route__start_on_land_moves_to_nearest_water_and_says_how_far():
+    start = {"lat": 9.0, "lon": 79.35}  # just inside the island's west edge
+    destination = {"lat": 9.0, "lon": 78.5}
+
+    result = plan_route(start, destination, restricted_zones=[], land=_ISLAND)
+
+    assert result.route is not None
+    assert not _ISLAND.covers(Point(result.route[0]["lon"], result.route[0]["lat"]))
+    assert 0 < result.start_offset_km < 15
+    line = LineString([(p["lon"], p["lat"]) for p in result.route])
+    assert not line.intersects(_ISLAND)
+
+
+def test_plan_route__start_inside_protected_area_is_refused_but_its_clearance_is_not():
+    park = _zone("Test Marine Park", Polygon([(79.4, 8.9), (79.6, 8.9), (79.6, 9.1), (79.4, 9.1)]))
+    destination = {"lat": 9.0, "lon": 78.6}
+
+    inside = plan_route({"lat": 9.0, "lon": 79.5}, destination, [park], land=None)
+    assert inside.route is None
+    assert "inside Test Marine Park" in inside.reason
+
+    # ~1km outside the park's east edge: within the 2km routing clearance,
+    # not inside the park — routed (from the nearest cell clear of it).
+    near = plan_route({"lat": 9.0, "lon": 79.61}, destination, [park], land=None)
+    assert near.route is not None
+    line = LineString([(p["lon"], p["lat"]) for p in near.route])
+    assert not line.intersects(park["polygon"])
+
+
+def test_plan_route__no_sea_route_gives_a_reason_not_a_line_over_land():
+    # Destination in a lake fully enclosed by land.
+    land = Polygon(
+        [(79.0, 8.5), (80.0, 8.5), (80.0, 9.5), (79.0, 9.5)],
+        holes=[[(79.45, 8.95), (79.55, 8.95), (79.55, 9.05), (79.45, 9.05)]],
+    )
+
+    result = plan_route({"lat": 9.0, "lon": 78.3}, {"lat": 9.0, "lon": 79.5}, [], land=land)
+
+    assert result.route is None
+    assert "no sea route" in result.reason
+
+
+def test_plan_route__real_coastline_chennai_to_gulf_of_mannar_stays_at_sea():
+    from backend.agents.deterministic.geospatial import (
+        get_active_restricted_areas,
+        get_land_mask,
+    )
+
+    land = get_land_mask()
+    assert land is not None, "committed land mask (data/land_india.geojson) failed to load"
+    chennai, mannar_pfz = {"lat": 13.08, "lon": 80.27}, {"lat": 8.9375, "lon": 79.3542}
+
+    result = plan_route(chennai, mannar_pfz, get_active_restricted_areas())
+
+    assert result.route is not None, result.reason
+    assert not land.intersects(LineString([(p["lon"], p["lat"]) for p in result.route]))
+    assert result.start_offset_km > 0  # Chennai's city point is on land

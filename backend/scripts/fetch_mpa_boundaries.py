@@ -92,6 +92,14 @@ def _fetch_detail_geometry(token: str, site_id) -> dict | None:
     return area.get("geojson")
 
 
+def _reported_area_km2(area: dict) -> float | None:
+    try:
+        value = float(area.get("reported_area"))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def _extract_areas(page_data: dict) -> list[dict]:
     return page_data.get("protected_areas") or page_data.get("protected_area_parcels") or []
 
@@ -148,6 +156,9 @@ def fetch_all(token: str) -> list[dict]:
                         "designation": area.get("designation"),
                         "iucn_category": area.get("iucn_category"),
                         "marine": area.get("marine"),
+                        # WDPA's reported area — the only extent a
+                        # Point-only site has (see geospatial.py).
+                        "reported_area_km2": _reported_area_km2(area),
                         "source": "protectedplanet.net WDPA API v4",
                     },
                     "geometry": geometry,
@@ -155,11 +166,10 @@ def fetch_all(token: str) -> list[dict]:
             )
             # WDPA carries some sites (often internationally-designated
             # ones without a digitized boundary) as a bare representative
-            # Point rather than a polygon, with no area of its own.
-            # geospatial.py buffers every cached geometry outward at load
-            # time, which turns this into a circular protective radius —
-            # flagged here just so that's not a silent surprise.
-            note = " [Point geometry — geospatial.py gives it a buffered radius, no real boundary]" if geometry.get("type") == "Point" else ""
+            # Point rather than a polygon. geospatial.py models those as a
+            # circle of the site's reported area (WDPA's own convention for
+            # point records) — flagged here so that's not a silent surprise.
+            note = " [Point geometry — geospatial.py uses a circle of its reported area, no real boundary]" if geometry.get("type") == "Point" else ""
             print(f"  + {name} (site_id={site_id}){note}")
 
         pagination = data.get("pagination") or {}

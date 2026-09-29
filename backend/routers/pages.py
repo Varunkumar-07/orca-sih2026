@@ -21,7 +21,7 @@ from backend.agents.deterministic.geospatial import (
     get_active_restricted_areas,
     haversine_km,
 )
-from backend.agents.reasoning.navigation_agent import find_route
+from backend.agents.reasoning.navigation_agent import plan_route
 from backend.schemas.contracts import GeoPoint
 from backend.services.alerts_service import get_active_alerts
 from backend.services.analytics_service import (
@@ -107,8 +107,9 @@ class RouteRequest(BaseModel):
 async def route(request: RouteRequest) -> dict:
     """Direct data passthrough for the Route Planner page — no chat/LLM
     involvement, no agent orchestration. Thin wrapper around
-    navigation_agent.find_route: that function's internal A* logic is not
-    modified here."""
+    navigation_agent.plan_route. start_offset_km / end_offset_km say how far
+    a start/destination on land was moved to reach open water (the route
+    itself begins/ends there); distance_km is the sea route only."""
     destination = request.destination
 
     if destination is None and request.destination_zone_id:
@@ -119,6 +120,8 @@ async def route(request: RouteRequest) -> dict:
                 "route": None,
                 "distance_km": None,
                 "waypoint_count": 0,
+                "start_offset_km": None,
+                "end_offset_km": None,
                 "reason": "destination_zone_id not found or has no point coordinates",
             }
         destination = GeoPoint(lat=match["coordinates"]["lat"], lon=match["coordinates"]["lon"])
@@ -128,26 +131,31 @@ async def route(request: RouteRequest) -> dict:
             "route": None,
             "distance_km": None,
             "waypoint_count": 0,
+            "start_offset_km": None,
+            "end_offset_km": None,
             "reason": "no destination provided (set destination or destination_zone_id)",
         }
 
     restricted_zones = get_active_restricted_areas()
     start = {"lat": request.start.lat, "lon": request.start.lon}
     dest = {"lat": destination.lat, "lon": destination.lon}
-    route_points = find_route(start, dest, restricted_zones)
+    result = plan_route(start, dest, restricted_zones)
+    route_points = result.route
 
     if route_points is None:
         return {
             "route": None,
             "distance_km": None,
             "waypoint_count": 0,
-            "reason": "no route found — start/destination inside a restricted zone, or destination unreachable",
+            "start_offset_km": None,
+            "end_offset_km": None,
+            "reason": f"No route found — {result.reason}.",
         }
 
-    # find_route itself only produces waypoints (see its docstring); total
+    # plan_route itself only produces waypoints (see its docstring); total
     # distance is derived here from those waypoints with the same
     # haversine_km geospatial.py already uses, rather than reported by
-    # find_route directly. No ETA is returned — that would need an assumed
+    # plan_route directly. No ETA is returned — that would need an assumed
     # vessel speed nowhere else in this codebase, and fabricating one would
     # break the "degrade, don't invent" convention every agent here follows
     # (e.g. tide_info is left None rather than guessed).
@@ -160,6 +168,8 @@ async def route(request: RouteRequest) -> dict:
         "route": route_points,
         "distance_km": round(distance_km, 2),
         "waypoint_count": len(route_points),
+        "start_offset_km": result.start_offset_km,
+        "end_offset_km": result.end_offset_km,
         "reason": None,
     }
 

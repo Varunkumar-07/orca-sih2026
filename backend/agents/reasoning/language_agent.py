@@ -78,6 +78,10 @@ _SCRIPT_RANGES: list[tuple[int, int, str]] = [
 # covers every subsequent translation for that pair.
 _pipeline_config_cache: dict[tuple[str, str, str], dict] = {}
 
+# Verdict icons reporting.py starts an answer's headline with (see
+# translate_output_from_english for why they're handled separately).
+_VERDICT_ICONS = ("✅", "⚠️", "❓", "⛔")
+
 
 def _detect_language(text: str) -> str:
     """Local Unicode-script heuristic — see module docstring for why this
@@ -277,7 +281,23 @@ def translate_output_from_english(answer_text: str, target_lang: str) -> tuple[s
     """
     if not target_lang or target_lang == "en":
         return answer_text, "en"
-    translated, ok = translate(answer_text, "en", target_lang)
+
+    # Bhashini drops the verdict icon (✅ / ⚠️ / ❓ / ⛔) that starts the
+    # headline line, and the chat UI keys the whole verdict card off that
+    # icon — so translated answers used to render as plain text. Send each
+    # headline without its icon and put the icon back afterwards; translate()
+    # maps lines back by position, so the icon lands on the same line.
+    lines = answer_text.split("\n")
+    icons: dict[int, str] = {}
+    for i, line in enumerate(lines):
+        icon = next((ic for ic in _VERDICT_ICONS if line.startswith(ic)), None)
+        if icon is not None:
+            icons[i] = icon
+            lines[i] = line[len(icon):].strip()
+    translated, ok = translate("\n".join(lines), "en", target_lang)
     if not ok:
         return answer_text, "en"
-    return translated, target_lang
+    out = translated.split("\n")
+    for i, icon in icons.items():
+        out[i] = f"{icon} {out[i].strip()}"
+    return "\n".join(out), target_lang

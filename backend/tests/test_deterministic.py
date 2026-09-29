@@ -470,3 +470,48 @@ def test_reporting__missing_is_distant_key_defaults_to_normal_framing():
 
     assert "Nearest fishing zone: PFZ-001" in final.answer_text
     assert "regional reference" not in final.answer_text
+
+
+# ---------------------------------------------------------------------------
+# Protected areas: inside the actual extent = PROHIBITED; merely near it
+# (within geospatial.MPA_PROXIMITY_KM) = a warning, never a ban.
+# ---------------------------------------------------------------------------
+
+
+def _at(lat: float, lon: float):
+    bundle = _fresh(FIXTURE_1_HAPPY_PATH)
+    bundle.query_location = GeoPoint(lat=lat, lon=lon)
+    run_ocean_analytics(bundle)
+    run_geospatial(bundle)
+    return bundle, run_reporting(bundle)
+
+
+def test_near_a_protected_area_is_a_warning_not_prohibited():
+    # Mumbai's city point is ~4.3km outside Thane Creek's WDPA boundary —
+    # it used to be "PROHIBITED" only because every boundary was widened 15km.
+    bundle, final = _at(19.0760, 72.8777)
+
+    assert bundle.geospatial.inside_restricted_area is False
+    assert bundle.geospatial.near_restricted_area_name == "Thane Creek"
+    assert 0 < bundle.geospatial.near_restricted_area_km < 15
+    assert "PROHIBITED" not in final.answer_text
+    assert "km from Thane Creek (protected area)" in final.answer_text
+
+
+def test_inside_a_point_only_site_is_prohibited_and_flagged_approximate():
+    # WDPA records the Gulf of Mannar biosphere reserve as a point with a
+    # 10,500 km2 reported area — (9.15, 79.15) lies inside that extent.
+    bundle, final = _at(9.15, 79.15)
+
+    assert bundle.geospatial.inside_restricted_area is True
+    assert bundle.geospatial.restricted_area_name == "Gulf of Mannar"
+    assert bundle.geospatial.restricted_area_approximate is True
+    assert final.answer_text.splitlines()[2].startswith("⛔ PROHIBITED")
+    assert "Approximate extent" in final.answer_text
+
+
+def test_tide_is_shown_as_text_not_a_raw_dict():
+    _bundle, final = _at(13.08, 80.27)
+
+    assert "Tide: high tide 14:32, low tide 08:10" in final.answer_text
+    assert "{" not in final.answer_text

@@ -14,6 +14,15 @@ uptime. If the cache is missing, empty, or fails to parse, this module
 falls back to a small set of hardcoded boundaries (Gulf of Mannar / Palk
 Bay) so restricted-zone checks degrade gracefully instead of going dark.
 
+Two distances, kept separate on purpose:
+- An area's *extent* decides PROHIBITED: the WDPA polygon itself, or —
+  for a site WDPA records only as a Point — a circle of the site's reported
+  area (WDPA's own convention for point records; flagged as approximate).
+- MPA_PROXIMITY_KM around that extent is only a proximity warning. It used
+  to be baked into the extent itself (a 15km buffer), which made every
+  query from Mumbai "PROHIBITED" — the city is 4.5km outside Thane Creek.
+Route planning adds its own, much smaller clearance (navigation_agent.py).
+
 Never raises across the boundary.
 """
 from __future__ import annotations
@@ -34,19 +43,16 @@ logger = logging.getLogger(__name__)
 # Local cache written by backend/scripts/fetch_mpa_boundaries.py — resolved
 # relative to this file so it's independent of the process's cwd.
 MPA_CACHE_PATH = Path(__file__).resolve().parent / "data" / "mpa_boundaries.geojson"
+# Natural Earth land clipped to the seas around India (~140KB), written by
+# backend/scripts/build_land_mask.py — what route planning treats as land.
+LAND_CACHE_PATH = Path(__file__).resolve().parent / "data" / "land_india.geojson"
 
-# WDPA digitizes some Indian MPAs as tight island/reef clusters (e.g. Gulf
-# of Mannar's Ramsar polygon covers only the 21 islands, not the marine
-# park's surrounding water) and others as a single representative Point
-# with no boundary at all. Neither is directly useful for a "how close to
-# a restricted zone" safety check, so every real cached geometry is
-# buffered outward by this margin before use — turning island clusters
-# into a park-wide zone and bare points into a protective radius.
-# Degrees-per-km is a flat approximation (1 deg latitude ~= 111km, and
-# longitude is within ~2% of that across India's 8-22N coastal range) —
-# fine here, not valid at high latitudes.
-MPA_BUFFER_KM = 15.0
-MPA_BUFFER_DEG = MPA_BUFFER_KM / 111.0
+# Within this distance of a protected area's extent (but not inside it) a
+# query gets a proximity warning — never a ban.
+MPA_PROXIMITY_KM = 15.0
+# Flat approximation (1 deg latitude ~= 111km; longitude scaled by
+# cos(lat)) — fine across India's 8-22N coastal range, not at high latitudes.
+KM_PER_DEG_LAT = 111.0
 
 # ---------------------------------------------------------------------------
 # Hardcoded fallback — used only when the real WDPA cache above is missing,
@@ -67,6 +73,7 @@ _FALLBACK_RESTRICTED_AREAS: list[dict] = [
                 (78.0, 9.6),
             ]
         ),
+        "approximate": True,
     },
     # Example additional restricted area (Palk Bay portion sometimes restricted)
     # Keep narrow so it doesn't interfere with existing fixtures
@@ -80,6 +87,7 @@ _FALLBACK_RESTRICTED_AREAS: list[dict] = [
                 (79.0, 10.2),
             ]
         ),
+        "approximate": True,
     },
 ]
 
@@ -141,6 +149,29 @@ def extract_pfz_center(
     return zlat, zlon, zname
 
 
+def _circle_km(lon: float, lat: float, radius_km: float) -> Polygon:
+    """A radius_km circle around (lon, lat) in degree coordinates."""
+    km_per_deg_lon = KM_PER_DEG_LAT * math.cos(math.radians(lat))
+    unit = Point(0.0, 0.0).buffer(1.0, quad_segs=16)
+    return Polygon([(lon + x * radius_km / km_per_deg_lon, lat + y * radius_km / KM_PER_DEG_LAT) for x, y in unit.exterior.coords])
+
+
+def _area_extent(name: str, geom, reported_area_km2: float | None) -> dict | None:
+    """{"name", "polygon", "approximate", "reported_area_km2"} for one WDPA
+    site. A polygon is used as-is. A Point has no boundary in WDPA, only a
+    reported area, so its extent is a circle of that area — flagged
+    approximate. A Point with no reported area has no usable extent (it
+    can't make anything PROHIBITED) and is skipped with a warning."""
+    if geom.geom_type in ("Point", "MultiPoint"):
+        if not reported_area_km2 or reported_area_km2 <= 0:
+            logger.warning("MPA '%s' is a bare point with no reported area — skipped (no extent to test against)", name)
+            return None
+        radius_km = math.sqrt(reported_area_km2 / math.pi)
+        center = geom.centroid
+        return {"name": name, "polygon": _circle_km(center.x, center.y, radius_km), "approximate": True, "reported_area_km2": reported_area_km2}
+    return {"name": name, "polygon": geom, "approximate": False, "reported_area_km2": reported_area_km2}
+
+
 def _load_mpa_cache() -> list[dict] | None:
     """Load restricted-area polygons from the local WDPA cache file.
 
@@ -173,11 +204,12 @@ def _load_mpa_cache() -> list[dict] | None:
             if not geometry:
                 continue
             try:
-                polygon = shape(geometry).buffer(MPA_BUFFER_DEG)
+                area = _area_extent(name, shape(geometry), (feature.get("properties") or {}).get("reported_area_km2"))
             except Exception:
                 logger.warning("Skipping malformed geometry for '%s' in MPA cache", name)
                 continue
-            areas.append({"name": name, "polygon": polygon})
+            if area is not None:
+                areas.append(area)
 
         if not areas:
             logger.warning(
@@ -206,6 +238,32 @@ def _get_restricted_areas() -> list[dict]:
     return _restricted_areas_cache
 
 
+# Lazily loaded, memoized: a prepared shapely geometry, or False once
+# loading has failed (so a missing file is logged once, not per route).
+_land_cache = None
+
+
+def get_land_mask():
+    """Land as one prepared shapely geometry (lon/lat), loaded once per
+    process from LAND_CACHE_PATH — or None if that file is missing or
+    unreadable, logged as an error (routes can then not be checked against
+    land, which callers must surface rather than hide)."""
+    global _land_cache
+    if _land_cache is None:
+        try:
+            import shapely
+
+            features = json.loads(LAND_CACHE_PATH.read_text())["features"]
+            land = shapely.union_all([shape(f["geometry"]) for f in features])
+            shapely.prepare(land)
+            _land_cache = land
+            logger.info("Loaded land mask: %d polygons from %s", len(features), LAND_CACHE_PATH)
+        except Exception as exc:
+            logger.error("Land mask unavailable at %s (%s) — routes cannot be checked against land", LAND_CACHE_PATH, exc)
+            _land_cache = False
+    return _land_cache or None
+
+
 def get_active_restricted_areas() -> list[dict]:
     """Public accessor for the restricted-area set currently in effect.
 
@@ -217,25 +275,49 @@ def get_active_restricted_areas() -> list[dict]:
     return _get_restricted_areas()
 
 
-def _check_restricted(lat: float, lon: float) -> tuple[bool, str | None]:
-    """Return (inside, area_name) for restricted-area containment.
-
-    Uses Shapely Point.within / intersects to handle boundary inclusively.
-    Shapely expects (x=lon, y=lat).
-    """
+def _restricted_area_at(lat: float, lon: float) -> dict | None:
+    """The restricted area whose extent contains (lat, lon), if any.
+    Boundary-inclusive ('covers'); Shapely expects (x=lon, y=lat)."""
     pt = Point(lon, lat)
     for area in _get_restricted_areas():
         poly: Polygon = area["polygon"]
-        # intersects includes boundary; contains excludes boundary — we want inclusive
-        # 'covers' is the correct inclusive predicate
         try:
             if poly.covers(pt):
-                return True, area["name"]
+                return area
         except Exception:
-            # fallback to intersects
             if poly.intersects(pt):
-                return True, area["name"]
-    return False, None
+                return area
+    return None
+
+
+def _check_restricted(lat: float, lon: float) -> tuple[bool, str | None]:
+    """Return (inside, area_name) for restricted-area containment."""
+    area = _restricted_area_at(lat, lon)
+    return (True, area["name"]) if area is not None else (False, None)
+
+
+def _distance_to_area_km(lat: float, lon: float, poly) -> float:
+    """Approximate km from (lat, lon) to the nearest edge of poly: the
+    nearest boundary point is found in degree space (fine at this range),
+    then measured with haversine."""
+    from shapely.ops import nearest_points
+
+    nearest = nearest_points(poly, Point(lon, lat))[0]
+    return haversine_km(lat, lon, nearest.y, nearest.x)
+
+
+def _nearby_restricted_area(lat: float, lon: float) -> tuple[str, float] | None:
+    """(name, km) of the closest restricted area within MPA_PROXIMITY_KM of
+    (lat, lon) — for a point already known to be outside every extent."""
+    best: tuple[str, float] | None = None
+    for area in _get_restricted_areas():
+        try:
+            km = _distance_to_area_km(lat, lon, area["polygon"])
+        except Exception:
+            continue
+        if km <= MPA_PROXIMITY_KM and (best is None or km < best[1]):
+            best = (area["name"], km)
+    return best
 
 
 def run_geospatial(bundle: EvidenceBundle) -> GeospatialResult:
@@ -247,6 +329,9 @@ def run_geospatial(bundle: EvidenceBundle) -> GeospatialResult:
     distance_km: float | None = None
     inside_restricted = False
     restricted_area_name: str | None = None
+    restricted_area_approximate = False
+    near_name: str | None = None
+    near_km: float | None = None
     input_summary = ""
     error_flag = False
 
@@ -263,7 +348,14 @@ def run_geospatial(bundle: EvidenceBundle) -> GeospatialResult:
 
         # --- Restricted area check (depends only on query location) ---
         if loc is not None:
-            inside_restricted, restricted_area_name = _check_restricted(loc.lat, loc.lon)
+            area = _restricted_area_at(loc.lat, loc.lon)
+            inside_restricted = area is not None
+            restricted_area_name = area["name"] if area else None
+            restricted_area_approximate = bool(area and area.get("approximate"))
+            if area is None:
+                nearby = _nearby_restricted_area(loc.lat, loc.lon)
+                if nearby is not None:
+                    near_name, near_km = nearby[0], round(nearby[1], 1)
         else:
             inside_restricted = False
             restricted_area_name = None
@@ -307,12 +399,17 @@ def run_geospatial(bundle: EvidenceBundle) -> GeospatialResult:
         distance_km = None
         inside_restricted = False
         restricted_area_name = None
+        restricted_area_approximate = False
+        near_name = near_km = None
 
     result = GeospatialResult(
         nearest_zone_name=nearest_zone_name,
         distance_km=distance_km,
         inside_restricted_area=inside_restricted,
         restricted_area_name=restricted_area_name,
+        restricted_area_approximate=restricted_area_approximate,
+        near_restricted_area_name=near_name,
+        near_restricted_area_km=near_km,
     )
 
     # Write back to bundle
@@ -328,6 +425,8 @@ def run_geospatial(bundle: EvidenceBundle) -> GeospatialResult:
             f"nearest={nearest_zone_name}, dist={distance_km}km, "
             f"inside_restricted={inside_restricted} ({restricted_area_name})"
         )
+        if near_name:
+            output_summary += f", near_restricted={near_name} ({near_km}km)"
 
     trace = TraceStep(
         agent_name="geospatial",

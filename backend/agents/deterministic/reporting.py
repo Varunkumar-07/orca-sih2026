@@ -82,10 +82,23 @@ def _format_weather(bundle: EvidenceBundle) -> str:
     else:
         parts.append("No active cyclone/lightning alerts")
     if w.tide_info:
-        parts.append(f"Tide info: {w.tide_info}")
+        parts.append(_format_tide(w.tide_info))
     if w.status == "partial" and w.error_message:
         parts.append(f"Note: {w.error_message}")
     return "; ".join(parts) + "."
+
+
+def _format_tide(tide_info) -> str:
+    """Tide as readable text — tide_info is a {"high_tide": "HH:MM",
+    "low_tide": "HH:MM"} dict (only the demo fixtures carry one; no live
+    source exists), never printed as a raw dict."""
+    if isinstance(tide_info, dict):
+        labels = {"high_tide": "high tide", "low_tide": "low tide"}
+        items = [f"{labels.get(k, str(k).replace('_', ' '))} {v}" for k, v in tide_info.items() if v]
+        if items:
+            return "Tide: " + ", ".join(items)
+        return "Tide: unavailable"
+    return f"Tide: {tide_info}"
 
 
 def _format_headline(bundle: EvidenceBundle) -> str:
@@ -153,7 +166,10 @@ def _format_geospatial(bundle: EvidenceBundle) -> str:
     g = bundle.geospatial
     if g.inside_restricted_area:
         name = g.restricted_area_name or "restricted area"
-        return f"Inside {name} — fishing is prohibited regardless of other conditions."
+        text = f"Inside {name} — fishing is prohibited regardless of other conditions."
+        if g.restricted_area_approximate:
+            text += " (Approximate extent: WDPA records this site as a point with a reported area, not a surveyed boundary.)"
+        return text
     parts: list[str] = []
     if g.nearest_zone_name:
         dist = f" ({g.distance_km} km away)" if g.distance_km is not None else ""
@@ -167,7 +183,13 @@ def _format_geospatial(bundle: EvidenceBundle) -> str:
             parts.append(f"Nearest fishing zone: {g.nearest_zone_name}{dist}")
     else:
         parts.append("No nearby fishing zone identified")
-    parts.append("Outside restricted areas")
+    if g.near_restricted_area_name:
+        parts.append(
+            f"Outside restricted areas, but {g.near_restricted_area_km} km from {g.near_restricted_area_name} "
+            "(protected area) — keep clear of its boundary"
+        )
+    else:
+        parts.append("Outside restricted areas")
     return "; ".join(parts) + "."
 
 

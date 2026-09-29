@@ -27,6 +27,7 @@ from shapely.geometry import LineString, Point
 
 from backend.agents.deterministic.geospatial import (
     get_active_restricted_areas,
+    get_land_mask,
     haversine_km,
 )
 from backend.main import app
@@ -68,20 +69,21 @@ def test_baseline_route_with_no_restricted_zone_in_the_way(client):
 
 
 def test_route_detours_around_the_real_gulf_of_mannar_restricted_zone(client):
-    """Start and destination straddle the real, currently-cached Gulf of
-    Mannar Marine Biosphere Reserve polygon — the straight line between them
-    passes directly through it, so a genuine route must detour around it
-    rather than crossing it, and must end up longer than the blocked
-    straight line as a result."""
+    """Start and destination — both at sea — straddle the real Gulf of
+    Mannar biosphere reserve (WDPA records it as a point with a 10,500 km2
+    reported area; geospatial.py models that as a circle of that area) — the
+    straight line between them passes through it, so a genuine route must
+    detour around it rather than crossing it (or any land), and must end up
+    longer than the blocked straight line as a result."""
     restricted_zones = get_active_restricted_areas()
-    mannar = next((z for z in restricted_zones if "mannar" in z["name"].lower()), None)
+    mannar = next((z for z in restricted_zones if z["name"] == "Gulf of Mannar"), None)
     assert mannar is not None, (
-        "expected a real Gulf-of-Mannar restricted zone in get_active_restricted_areas() — "
+        "expected the real Gulf of Mannar biosphere reserve in get_active_restricted_areas() — "
         "this test's start/destination points are specifically chosen to straddle it"
     )
 
-    start = {"lat": 9.0, "lon": 77.8}
-    destination = {"lat": 9.0, "lon": 79.6}
+    start = {"lat": 8.6, "lon": 78.3}
+    destination = {"lat": 8.9, "lon": 79.6}
     # Sanity check on the test's own construction: the direct line between
     # these two points must actually cross the restricted zone, or a route
     # not detouring around it would prove nothing.
@@ -106,6 +108,8 @@ def test_route_detours_around_the_real_gulf_of_mannar_restricted_zone(client):
     assert body["distance_km"] > straight_km, (
         "a route detouring around a real restricted zone must be longer than the blocked direct line"
     )
+    land = get_land_mask()
+    assert not land.intersects(LineString([(p["lon"], p["lat"]) for p in body["route"]])), "route crosses land"
 
 
 def test_route_resolves_a_destination_zone_id_against_the_real_zones_catalog(client):
@@ -126,8 +130,31 @@ def test_route_resolves_a_destination_zone_id_against_the_real_zones_catalog(cli
     body = resp.json()
     assert body["reason"] is None
     assert body["route"] is not None
-    assert body["route"][-1]["lat"] == pytest.approx(pfz_zone["coordinates"]["lat"], abs=0.05)
-    assert body["route"][-1]["lon"] == pytest.approx(pfz_zone["coordinates"]["lon"], abs=0.05)
+    # The route ends at the zone — or, if the zone point itself is on land
+    # (conftest's synthetic zones sit on the anchor city), at the nearest
+    # open water, with that distance reported as end_offset_km.
+    end = body["route"][-1]
+    gap_km = haversine_km(end["lat"], end["lon"], pfz_zone["coordinates"]["lat"], pfz_zone["coordinates"]["lon"])
+    assert gap_km <= body["end_offset_km"] + 3.0
+
+
+def test_route_from_a_city_on_land_starts_at_open_water_and_says_so(client):
+    """Every city start point is on land; the route must start at sea (never
+    draw a line over land) and report how far that is from the start."""
+    resp = client.post("/route", json={"start": {"lat": 19.076, "lon": 72.8777}, "destination": {"lat": 18.9792, "lon": 72.7292}})
+    body = resp.json()
+
+    assert body["reason"] is None, body["reason"]
+    assert body["start_offset_km"] > 0
+    assert not get_land_mask().intersects(LineString([(p["lon"], p["lat"]) for p in body["route"]]))
+
+
+def test_route_from_inside_a_protected_area_is_refused_with_its_name(client):
+    resp = client.post("/route", json={"start": {"lat": 9.15, "lon": 79.15}, "destination": {"lat": 13.0625, "lon": 80.3542}})
+    body = resp.json()
+
+    assert body["route"] is None
+    assert "inside Gulf of Mannar" in body["reason"]
 
 
 def test_no_destination_provided_returns_a_clear_reason_not_an_error(client):
