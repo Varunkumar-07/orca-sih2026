@@ -1,6 +1,6 @@
 # ORCA Backend — Smart India Hackathon 2026 (ISRO, SIH26176)
 
-Multi-agent marine intelligence platform: conversational query → planning/orchestrator → marine/weather/risk (Groq `openai/gpt-oss-20b`) → ocean analytics/geospatial (deterministic `pandas`/`numpy`/`shapely`) → reporting/visualization → `FinalResponse` with live reasoning trace + `MapPayload`. Backs 9 frontend pages: Home, Chat + Map, Zones Explorer, Weather, Route Planner, Alerts, Analytics, Download, History.
+Multi-agent marine intelligence platform: conversational query → planning/orchestrator → marine + weather (in parallel) → risk (Groq `openai/gpt-oss-20b`) → hard safety limits (deterministic, `safety_limits.py`) → ocean analytics/geospatial (deterministic `pandas`/`numpy`/`shapely`) → reporting/visualization → `FinalResponse` with live reasoning trace + `MapPayload`. Backs 9 frontend pages: Home, Chat + Map, Zones Explorer, Weather, Route Planner, Alerts, Analytics, Download, History.
 
 ## Quick Start (Demo-Ready — No Live API Required)
 
@@ -189,7 +189,7 @@ inside a protected area.
 
 - **Chat's PFZ zones are the cached nearest-anchor region's result, not a fresh computation at the exact query point** — see "Chat's own lookup" in "PFZ zone detection" above. `distance_km` is always recomputed from the real query point, but the zone locations themselves are that anchor's cached result; the `is_distant` flag (75km threshold) is what keeps the response honest when the nearest anchor is genuinely far. INCOIS's own advisory zones remain unavailable as an API either way, so no path reproduces INCOIS's exact published zones.
 - **Tide and UV index are not modeled** — dropped from scope; `weather_service.py`/`analytics_service.py` do not surface them.
-- **7-day wave/wind forecast models** (`backend/models/forecast_day1-7.pkl`) are trained artifacts, committed to the repo — regenerate with `python -m backend.scripts.train_forecast_models` if you need to retrain them.
+- **7-day wave/wind forecast models** (`backend/models/forecast_day1-7.pkl`) are trained artifacts, committed to the repo — regenerate with `python -m backend.scripts.train_forecast_models` if you need to retrain them. They're trained on 9 of the 11 anchor cities: the Goa and Kolkata city points are inland and the Open-Meteo marine archive has no data there (PFZ detection still covers all 11, since it scans a grid box around each city). Usable training data starts on 2022-11-23, because daily SST is missing before that. Wind beats both baselines (persistence and climatology) at every horizon; wave height ties persistence at day 1 and loses slightly to climatology from day 5 on. Full table in the root [README](../README.md#forecast-models).
 
 ## Project Structure
 
@@ -213,6 +213,9 @@ backend/
                                     # no LLM: navigation (A* routing), user_interaction (session memory)
                                     # Bhashini: language
   agents/deterministic/
+    safety_limits.py # hard go/no-go limits (wave > 3 m, wind > 45 km/h, cyclone/lightning alert,
+                     # inside a protected area) enforced on the risk agent's LLM verdict; can only make
+                     # it stricter, and adds a "safety_rules" TraceStep when a limit is breached
     analytics.py   # SST/chlorophyll thresholds (pandas/numpy) + TraceStep
     geospatial.py  # haversine, nearest PFZ, real MPA geofence (shapely), land mask loader + TraceStep
     reporting.py   # merges all evidence → FinalResponse (graceful fallback) + TraceStep
@@ -224,13 +227,17 @@ backend/
                                     # pfz_service.py — live SST/chlorophyll front detection + the
                                     # shared cache chat, Zones Explorer, /route, /alerts,
                                     # /weather/forecast, /export all read (see dedicated section above)
+                                    # forecast_targets.py — target standardization shared by forecast
+                                    # training and serving
   auth.py / rate_limit.py          # optional X-API-Key auth + per-IP rate limiting middlewares
   models/                          # trained forecast .pkl artifacts (committed, regenerable)
   scripts/
     fetch_mpa_boundaries.py        # one-time/periodic refresh of the MPA cache above
     build_land_mask.py             # rebuilds data/land_india.geojson from Natural Earth
-    train_forecast_models.py       # trains the 7-day wave/wind forecast models
-    validate_forecast_models.py    # checks the trained .pkl files load and match the training features
+    train_forecast_models.py       # trains the 7-day wave/wind forecast models and scores them
+                                   # against persistence/climatology baselines
+    validate_forecast_models.py    # checks the trained .pkl files load and match the training features,
+                                   # prints model vs baselines, warns where the model loses
 frontend/
   src/App.tsx            # react-router routes for all 9 pages
   src/components/
@@ -250,13 +257,15 @@ Run these from the **project root** too, for the same reason as above. The backe
 
 ```bash
 # backend — full suite: 9 core agents + history layer + PFZ front
-# detection/cache + chat's live wiring + startup pre-warm. External APIs are
-# mocked (PFZ endpoint tests use a synthetic satellite grid — see
-# conftest.py's offline_pfz_data). test_live_smoke.py is the exception: a
-# gated live end-to-end test that only runs with a real GROQ_API_KEY,
-# otherwise skips instantly
+# detection/cache + chat's live wiring + startup pre-warm. With no API keys
+# set (as in CI), external APIs are mocked (PFZ endpoint tests use a
+# synthetic satellite grid — see conftest.py's offline_pfz_data). The app
+# loads backend/.env, so real keys there turn on live calls in two places:
+# test_live_smoke.py (real Groq + Copernicus; skips without a real
+# GROQ_API_KEY) and the /export history test (real Open-Meteo + Copernicus).
+# Blank the keys to run it the way CI does:
 source backend/.venv/bin/activate
-PYTHONPATH="$(pwd)" pytest backend/tests/ -q
+GROQ_API_KEY= COPERNICUSMARINE_USERNAME= COPERNICUSMARINE_PASSWORD= PYTHONPATH="$(pwd)" pytest backend/tests/ -q
 # via HTTP
 curl -s http://127.0.0.1:8000/health | jq
 # frontend — component/page tests (Vitest + React Testing Library),

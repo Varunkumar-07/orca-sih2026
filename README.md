@@ -54,7 +54,11 @@ flowchart LR
             DET["Analytics · Geospatial<br/>Navigation (A*)"]
             REP["Reporting · Visualization"]
             LANG2["Language Agent<br/>translate out"]
-            LANG1 --> PLAN --> MARINE --> WEATHER --> RISK --> DET --> REP --> LANG2
+            SAFE["Safety rules<br/>hard limits in code"]
+            LANG1 --> PLAN
+            PLAN --> MARINE & WEATHER
+            MARINE & WEATHER --> RISK
+            RISK --> SAFE --> DET --> REP --> LANG2
             PLAN <--> UIA
         end
 
@@ -94,7 +98,11 @@ flowchart LR
     CHAT -. "Groq failure" .-> SNAP
 ```
 
-The LLM (Groq, `openai/gpt-oss-20b`) handles only judgment calls: intent, location and risk reasoning. Geofencing, thresholds, PFZ scoring, A* routing and the forecast models are deterministic code.
+The Marine and Weather agents run at the same time; Risk waits for both.
+
+The LLM (Groq, `openai/gpt-oss-20b`) handles only judgment calls: intent, location and the first risk verdict. Geofencing, PFZ scoring, A* routing and the forecast models are deterministic code.
+
+Hard safety limits are also enforced in code, after the LLM gives its verdict (`backend/agents/deterministic/safety_limits.py`): wave height above 3 m, wind above 45 km/h, an active cyclone or lightning alert, or a location inside a protected area (PROHIBITED). If any of these is breached, the answer is "not safe" whatever the LLM said. The rules can only make a verdict stricter, never turn it into "safe". When the rules decide, the answer says "limit breached" instead of a confidence percentage, and a `safety_rules` step in the trace shows the LLM's original verdict and which limit was breached. The 3 m and 45 km/h values are the thresholds the LLM prompt used before they were moved into code.
 
 ## Tech stack
 
@@ -212,7 +220,11 @@ Then run the suite from the repo root, with the venv active:
 PYTHONPATH=. python -m pytest backend/tests -q
 ```
 
-The suite runs offline, and external APIs are mocked. `test_live_smoke.py` makes real Groq and Copernicus calls and skips itself unless a real `GROQ_API_KEY` is set.
+With no API keys set, the suite runs offline and external APIs are mocked; this is how CI runs it. The app loads `backend/.env`, so if it holds real keys, a few tests make real calls: `test_live_smoke.py` calls Groq and Copernicus (it skips itself unless a real `GROQ_API_KEY` is set), and the `/export` history test fetches from Open-Meteo and Copernicus. Those depend on the network and can be slow. To run the suite the way CI does, blank the keys for that run:
+
+```bash
+GROQ_API_KEY= COPERNICUSMARINE_USERNAME= COPERNICUSMARINE_PASSWORD= PYTHONPATH=. python -m pytest backend/tests -q
+```
 
 **Frontend**
 
@@ -229,30 +241,39 @@ npm run build
 
 `GET /weather/forecast` uses 7 RandomForest models in `backend/models/`, one per day ahead (`forecast_day1.pkl` to `forecast_day7.pkl`). Each one predicts both wave height (m) and max wind speed (km/h).
 
-- Data: daily Open-Meteo marine and weather archives for the same 11 coastal cities used for PFZ detection, from 2021-11-01 (when the marine archive has real data) to two days before the training run.
+- Data: daily Open-Meteo marine and weather archives, requested from 2021-11-01 to two days before the training run. The training script asks for the same 11 cities used for PFZ detection, but only 9 have data: the Goa and Kolkata city points are inland and the marine archive returns nothing there. PFZ detection is not affected, since it scans a grid box around each city rather than the city point itself.
+- Daily SST is missing for about 400 days before early 2025, and rows with a missing feature are dropped, so the usable training data starts on 2022-11-23.
 - Features: lat, lon, month (sin/cos), wave height and its previous-day value, wind speed and its previous-day value, SST, air temperature.
-- Each horizon is predicted directly from real day-0 values. Predictions are never fed back in as inputs.
-- Split: rows sorted by date across all cities, first 80% for training, last 20% for testing.
-- Settings: 100 trees, `max_depth=12`, `min_samples_leaf=5`. The depth cap keeps each file small enough to commit.
+- Each horizon is predicted directly from real day-0 values. Predictions are never fed back in as inputs. The target and the previous-day values are joined by calendar date, so a missing day is dropped rather than filled from a neighbouring row.
+- Split: one cutoff date for all cities. Dates before it (about 80% of them) are for training, the rest for testing. A training row is only kept if the day it predicts is also before the cutoff, so no date's data is on both sides.
+- Targets: wave (metres) and wind (km/h) are standardized (z-scored with training-set stats) before fitting, and converted back when predicting. Without this, wind's larger numbers dominated the tree splits and wave height was barely learned. We compared this with predicting the change from day 0, choosing on the last 15% of the training period only, never on the test set.
+- Settings: 100 trees, `max_depth=12`, `min_samples_leaf=5`. The depth cap keeps each file small enough to commit (about 9 to 11 MB each).
 
-Test-set results from [`forecast_metrics.json`](backend/models/forecast_metrics.json):
+To tell whether the models are any good, each one is scored against two simple baselines on the same test rows: persistence (day+N is the same as today) and climatology (the average for that city and calendar month, from training data only). Test-set MAE from [`forecast_metrics.json`](backend/models/forecast_metrics.json), which also records RMSE, skill scores, the split dates and when the models were trained:
 
-| Day | Wave MAE (m) | Wave RMSE (m) | Wind MAE (km/h) | Wind RMSE (km/h) | Train / test rows |
-|---|---|---|---|---|---|
-| 1 | 0.152 | 0.210 | 2.38 | 3.14 | 9900 / 2475 |
-| 2 | 0.182 | 0.247 | 2.84 | 3.72 | 9892 / 2474 |
-| 3 | 0.198 | 0.268 | 3.04 | 3.98 | 9885 / 2472 |
-| 4 | 0.208 | 0.280 | 3.11 | 4.07 | 9878 / 2470 |
-| 5 | 0.215 | 0.288 | 3.18 | 4.17 | 9871 / 2468 |
-| 6 | 0.219 | 0.294 | 3.26 | 4.26 | 9864 / 2466 |
-| 7 | 0.219 | 0.296 | 3.27 | 4.28 | 9856 / 2465 |
+| Day | Wave model (m) | Wave persistence | Wave climatology | Wind model (km/h) | Wind persistence | Wind climatology |
+|---|---|---|---|---|---|---|
+| 1 | 0.120 | 0.120 | 0.202 | 2.47 | 2.61 | 3.49 |
+| 2 | 0.167 | 0.177 | 0.202 | 2.98 | 3.32 | 3.49 |
+| 3 | 0.187 | 0.213 | 0.202 | 3.19 | 3.74 | 3.49 |
+| 4 | 0.196 | 0.230 | 0.202 | 3.23 | 3.93 | 3.49 |
+| 5 | 0.203 | 0.243 | 0.202 | 3.29 | 4.02 | 3.49 |
+| 6 | 0.209 | 0.254 | 0.202 | 3.36 | 4.17 | 3.49 |
+| 7 | 0.214 | 0.260 | 0.202 | 3.39 | 4.24 | 3.49 |
+
+Wind beats both baselines at every horizon, though only narrowly against climatology by days 6 and 7. Wave height beats persistence on days 2 to 7 and ties it on day 1, and beats climatology up to day 4; from day 5 on, the city's monthly average is slightly more accurate than the model.
 
 Retrain and check them from the repo root:
 
 ```bash
 python -m backend.scripts.train_forecast_models
+```
+
+```bash
 python -m backend.scripts.validate_forecast_models
 ```
+
+The validate script prints the model-vs-baseline table and warns, without failing, wherever the model loses to a baseline.
 
 ## Deployment (Render)
 
