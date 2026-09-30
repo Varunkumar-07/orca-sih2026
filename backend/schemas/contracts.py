@@ -47,9 +47,15 @@ class WeatherDataResult(BaseModel):
 class RiskAssessment(BaseModel):
     status: Literal["ok", "partial", "error"]
     safe_to_go: bool | None
-    confidence: float  # 0.0-1.0
+    # 0.0-1.0 for an LLM verdict; None for a rule-based one (a hard limit
+    # decided it — see agents/deterministic/safety_limits.py), which has no
+    # probability to report.
+    confidence: float | None
     explanation: str
     error_message: str | None = None
+    # "llm": the Risk Assessment Agent's own verdict. "rules": a hard safety
+    # limit overrode it toward UNSAFE (safety_limits.enforce_hard_limits).
+    verdict_source: Literal["llm", "rules"] = "llm"
 
 
 # ---- Team Claude consumes everything above, produces everything below ----

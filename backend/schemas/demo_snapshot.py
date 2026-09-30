@@ -17,14 +17,20 @@ served, so that is always genuinely current.
 Regenerated 2026-09-07 against the current pipeline (headline-first
 reporting.py format, marine_data_agent.py's 3-candidate PFZ list, populated
 detected_language/response_language). The "hazard_visakhapatnam" scenario's
-query text was worded to explicitly ask about a cyclone warning, because
-weather_agent.py now only returns a hazardous snapshot (wind=65km/h,
-cyclone_alert=True) when the live intent classifier reads the query as
-"cyclone" — a broad "is it safe to go out" phrasing classifies as "general"
-and gets calm conditions instead. Everything downstream of that input — the
+query text explicitly asks about a cyclone warning. Its hazardous weather
+input (wind=65km/h, cyclone_alert=True) came from weather_agent.py as it was
+at capture time, which — per the note written then — returned that reading
+only when its intent classifier read the query as "cyclone". The current
+weather_agent.py does not do this: its intent classifier only labels the
+trace, and wind/wave/alerts always come from live Open-Meteo data. So treat
+this scenario's weather as a captured example, not a live reading. The
 marine_data_agent classification call and the risk_assessment_agent's
-safety judgment — is a genuine Groq call reasoning over that data, not
-scripted.
+safety judgment in these snapshots were genuine Groq calls.
+
+These snapshots are served as-is: the hard safety limits
+(agents/deterministic/safety_limits.py) are not re-applied to them. That's
+why /query/full never serves one when live weather already breaches a hard
+limit (see routers/chat.py).
 
 _REAL_RESTRICTED_OVERLAYS holds the ~1,150-vertex set of active
 restricted-area polygons visualization.py includes in every map_payload

@@ -30,6 +30,11 @@ from backend.agents.deterministic.geospatial import (
     run_geospatial,
 )
 from backend.agents.deterministic.reporting import run_reporting
+from backend.agents.deterministic.safety_limits import (
+    enforce_hard_limits,
+    prohibited_area_breaches,
+    weather_limit_breaches,
+)
 from backend.agents.deterministic.visualization import run_visualization
 from backend.agents.reasoning._groq_errors import (
     is_groq_api_failure as _is_groq_api_failure,
@@ -165,6 +170,14 @@ def _run_deterministic_pipeline(
         run_geospatial(bundle)
     except Exception as exc:
         logger.warning("[DETERMINISTIC PIPELINE] geospatial stage failed: %s", exc)
+    # PROHIBITED is a hard limit too (safety_limits.py): inside a protected
+    # area the verdict is UNSAFE whatever the risk agent said — including a
+    # demo fixture's. The weather limits were already enforced inside the
+    # risk agent itself, which has no geospatial result to check this with.
+    try:
+        bundle.risk = enforce_hard_limits(bundle.risk, prohibited_area_breaches(bundle.geospatial), bundle.trace)
+    except Exception as exc:
+        logger.warning("[DETERMINISTIC PIPELINE] hard-limit stage failed: %s", exc)
     # Phase 2
     final = run_reporting(bundle)
     try:
@@ -464,7 +477,19 @@ async def query_full(request: QueryRequest, response: Response) -> FinalResponse
         )
         return await _apply_output_language(final, effective_language)
 
-    if api_failure_detected or _bundle_has_api_failure(bundle):
+    api_failed = api_failure_detected or _bundle_has_api_failure(bundle)
+    live_breaches = weather_limit_breaches(bundle.weather) if api_failed else []
+    if live_breaches:
+        # Live weather already breaches a hard limit, so the risk agent's
+        # verdict is UNSAFE by rule (see safety_limits.py) even though its
+        # LLM call failed. A cached snapshot could say "safe" for some other
+        # place and time — never serve one over a live hazard; answer from
+        # the live evidence below instead.
+        logger.warning(
+            "[DEMO FALLBACK] skipped for query=%r — live weather breaches hard limits: %s",
+            english_query[:200], "; ".join(live_breaches),
+        )
+    elif api_failed:
         # run_planning_agent already flags this explicitly (it's the only
         # place that knows whether ITS OWN classify call hit a Groq failure
         # before marine/weather ever got a location to work with); the

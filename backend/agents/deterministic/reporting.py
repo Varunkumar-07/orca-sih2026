@@ -121,12 +121,21 @@ def _format_risk(bundle: EvidenceBundle) -> str:
     if bundle.risk is None:
         return "Safety assessment not available."
     r = bundle.risk
-    if r.safe_to_go is True:
-        base = f"Safe to go (confidence {r.confidence:.0%})"
-    elif r.safe_to_go is False:
-        base = f"Not safe to go (confidence {r.confidence:.0%})"
+    # A rule-based verdict (a hard limit decided it — see safety_limits.py)
+    # has no probability behind it, so it says so instead of showing a %.
+    if r.verdict_source == "rules":
+        qualifier = "limit breached"
+    elif r.confidence is None:
+        qualifier = None
     else:
-        base = f"Safety assessment inconclusive (confidence {r.confidence:.0%})"
+        qualifier = f"confidence {r.confidence:.0%}"
+    suffix = f" ({qualifier})" if qualifier else ""
+    if r.safe_to_go is True:
+        base = f"Safe to go{suffix}"
+    elif r.safe_to_go is False:
+        base = f"Not safe to go{suffix}"
+    else:
+        base = f"Safety assessment inconclusive{suffix}"
     if r.explanation:
         base += f" — {r.explanation}"
     if r.status in ("partial", "error") and r.error_message:
@@ -216,8 +225,10 @@ def _build_answer(bundle: EvidenceBundle) -> str:
             f"Entry and fishing are strictly prohibited in {name}. Do not proceed — "
             f"this restriction overrides all other sea and weather conditions."
         )
-        # Qualified safety — override any optimistic risk assessment
-        if bundle.risk is not None:
+        # Qualified safety — override any optimistic risk assessment. Once
+        # the hard limits have applied PROHIBITED (verdict_source "rules"),
+        # the LLM's original verdict is in the trace, not repeated here.
+        if bundle.risk is not None and bundle.risk.verdict_source != "rules":
             orig_risk = _format_risk(bundle)
             lines.append(f"Safety: RESTRICTED — Not permitted (overrides: {orig_risk})")
         else:

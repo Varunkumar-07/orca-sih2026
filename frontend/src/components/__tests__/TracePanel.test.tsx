@@ -60,3 +60,15 @@ describe('TracePanel — with steps', () => {
     expect(screen.getByText(/2\. Marine Data Discovery/)).toBeInTheDocument()
   })
 })
+
+describe('TracePanel — safety rules step', () => {
+  it('labels the hard-limit override step so the user can see the code overrode the AI', () => {
+    const trace = [
+      step({ agent_name: 'risk_assessment_agent', output_summary: 'safe_to_go=True, confidence=0.88' }),
+      step({ agent_name: 'safety_rules', output_summary: 'OVERRIDE -> safe_to_go=False (rule-based): active cyclone alert' }),
+    ]
+    render(<TracePanel trace={trace} visibleCount={2} />)
+    expect(screen.getByText(/2\. Safety Rules \(hard limits\)/)).toBeInTheDocument()
+    expect(screen.getByText(/OVERRIDE -> safe_to_go=False/)).toBeInTheDocument()
+  })
+})

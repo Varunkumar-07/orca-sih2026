@@ -60,10 +60,10 @@ def _validate_variables(variables: str | None) -> list[str]:
 @router.get("/zones")
 async def zones() -> dict:
     """Direct data passthrough for the Zones Explorer page — no chat/LLM
-    involvement. Combines real front-detected PFZ zones (falling back to
-    the mock heuristic generator per-anchor when live data isn't
-    available) and the same restricted-area boundaries the chat flow
-    already uses into one flat list. Reads through the shared cache in
+    involvement. Combines real front-detected PFZ zones (an anchor with no
+    live data contributes no zones — there is no mock or sample fallback)
+    and the same restricted-area boundaries the chat flow already uses
+    into one flat list. Reads through the shared cache in
     pfz_service.get_cached_zones — see that module for the TTL/anchor
     details; this is the same live-zone source of truth /route, /alerts,
     /weather/forecast, and /export already depend on via this function."""

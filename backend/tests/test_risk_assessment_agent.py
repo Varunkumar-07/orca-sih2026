@@ -187,7 +187,13 @@ def test_ok_path_passes_through_groq_output_untouched(monkeypatch):
     assert result.safe_to_go is False
     assert result.confidence == 0.92
     assert result.explanation == "Active cyclone alert."
-    assert "safe_to_go=False, confidence=0.92" in trace[-1].output_summary
+    # The cyclone alert is also a hard limit (safety_limits.py): the rules
+    # agree with the LLM's UNSAFE verdict, so its result stays untouched and
+    # a safety_rules step records the agreement after the agent's own step.
+    assert [t.agent_name for t in trace] == ["risk_assessment_agent", "safety_rules"]
+    assert "safe_to_go=False, confidence=0.92" in trace[0].output_summary
+    assert "agrees" in trace[1].output_summary
+    assert result.verdict_source == "llm"
 
 
 def test_reason_over_data_sends_both_marine_and_weather_fields(monkeypatch):

@@ -14,6 +14,10 @@ any failure (network, parsing, missing data) degrades to status="error".
 import asyncio
 import logging
 
+from backend.agents.deterministic.safety_limits import (
+    CYCLONE_WIND_THRESHOLD_KMH,
+    THUNDERSTORM_WMO_CODES,
+)
 from backend.agents.reasoning._groq_client import call_groq_json
 from backend.agents.reasoning._trace import record_trace
 from backend.error_utils import describe_exception
@@ -25,10 +29,10 @@ logger = logging.getLogger("orca.weather_agent")
 
 _FORECAST_URL = open_meteo.FORECAST_URL
 _MARINE_URL = open_meteo.MARINE_URL
-# IMD classifies a "Cyclonic Storm" at sustained wind >= 62 km/h.
-_CYCLONE_WIND_THRESHOLD_KMH = 62.0
-# WMO weather codes (used by Open-Meteo) for thunderstorm conditions.
-_THUNDERSTORM_CODES = {95, 96, 99}
+# Defined once in safety_limits.py (with the go/no-go limits); these names
+# are what weather_service.py and alerts_service.py import from here.
+_CYCLONE_WIND_THRESHOLD_KMH = CYCLONE_WIND_THRESHOLD_KMH
+_THUNDERSTORM_CODES = THUNDERSTORM_WMO_CODES
 
 _INTENT_SYSTEM_PROMPT = """You are a weather/hazard intent classifier for a \
 fisheries assistant. Given a user's query, classify which single weather \

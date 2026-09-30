@@ -5,10 +5,20 @@ Reasons over an EvidenceBundle's marine + weather data to produce a
 RiskAssessment. Never raises across the agent boundary — any failure or
 incomplete input degrades to a partial/error result instead of a fabricated
 confident answer.
+
+Whatever path produced the verdict (LLM, degraded, or failed), the weather
+hard limits in safety_limits.py are then enforced on it in code: a breached
+limit makes it UNSAFE, never the reverse.
 """
 
 import json
 
+from backend.agents.deterministic.safety_limits import (
+    WAVE_HEIGHT_LIMIT_M,
+    WIND_LIMIT_KMH,
+    enforce_hard_limits,
+    weather_limit_breaches,
+)
 from backend.agents.reasoning._groq_client import call_groq_json
 from backend.agents.reasoning._trace import record_trace
 from backend.schemas.contracts import (
@@ -19,16 +29,16 @@ from backend.schemas.contracts import (
     WeatherDataResult,
 )
 
-_SYSTEM_PROMPT = """You are the risk assessment agent for ORCA, a marine \
+_SYSTEM_PROMPT = f"""You are the risk assessment agent for ORCA, a marine \
 intelligence assistant for fishermen and coastal operators. You are given \
 marine data (sea surface temperature, chlorophyll, potential fishing zones) \
 and weather data (wind, wave height, cyclone/lightning alerts) for a \
 location. Reason over both to judge whether it is safe to go out to sea. \
 Respond with ONLY a JSON object, no other text, in the form:
-{"safe_to_go": true | false, "confidence": <float 0.0-1.0>, "explanation": "<one or two sentences>"}
+{{"safe_to_go": true | false, "confidence": <float 0.0-1.0>, "explanation": "<one or two sentences>"}}
 
 Be conservative: any active cyclone or lightning alert, or wave height above \
-3 meters, or wind above 45 km/h should push safe_to_go to false with high \
+{WAVE_HEIGHT_LIMIT_M:g} meters, or wind above {WIND_LIMIT_KMH:g} km/h should push safe_to_go to false with high \
 confidence. Calm conditions with no alerts should push safe_to_go to true."""
 
 
@@ -127,4 +137,4 @@ async def run_risk_assessment_agent(
         output_summary = f"error: {exc}"
 
     record_trace(trace, "risk_assessment_agent", input_summary, output_summary)
-    return result
+    return enforce_hard_limits(result, weather_limit_breaches(weather), trace)
