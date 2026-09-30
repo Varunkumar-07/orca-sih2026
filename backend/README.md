@@ -53,6 +53,7 @@ Copy `.env.example` to `.env` and fill in whichever of these you want live (ever
 | `ORCA_API_KEY` | shared-secret auth (`auth.py`) — every request except `GET /health` must send a matching `X-API-Key` | every route stays open |
 | `RATE_LIMIT_ENABLED` / `RATE_LIMIT_PER_MINUTE` | per-client-IP rate limiting (`rate_limit.py`) | enabled by default with a generous limit |
 | `MAX_REQUEST_BODY_BYTES` | request body size cap (`main.py`) | 2 MiB |
+| `OPEN_METEO_API_KEY` | every Open-Meteo call (`services/open_meteo.py`), sent to the paid `customer-*` hosts | free keyless tier, whose daily quota is per IP and can run out on shared hosts like Render |
 
 `POST /query/demo` always uses fixtures (no key needed). `POST /query/full` uses live planning when `GROQ_API_KEY` is set, otherwise falls back to fixture demo.
 
@@ -84,6 +85,18 @@ curl -X POST http://127.0.0.1:8000/query/demo \
   -H "Content-Type: application/json" \
   -d '{"query": "can I fish near Gulf of Mannar"}'
 ```
+
+`POST /route` takes `start` (`{lat, lon}`) and either `destination` (`{lat, lon}`) or `destination_zone_id` (a PFZ id from `/zones`). It returns:
+
+| Field | Meaning |
+|---|---|
+| `route` | list of `{lat, lon}` waypoints, or `null` if no route |
+| `distance_km` | length of the sea route only |
+| `waypoint_count` | number of waypoints |
+| `start_offset_km` / `end_offset_km` | how far the start/destination was moved to reach open water (a point on land, or inside the clearance around a protected area) |
+| `reason` | why there's no route, otherwise `null` |
+
+`GET /history` query params: `page_source` (`chat`, `zones`, `weather`, `route`, `alerts`, `analytics`, `download`), `start_date` / `end_date` (`YYYY-MM-DD`), `limit` (1–200, default 20), `offset`, and `tz_offset_minutes`. The date range is read as calendar days in the caller's timezone, `tz_offset_minutes` ahead of UTC (-720 to 840). It defaults to IST (330); the History page sends the browser's own offset.
 
 ## Multi-turn sessions (`session_id`)
 
@@ -162,10 +175,15 @@ python -m backend.scripts.fetch_mpa_boundaries
 
 If the cache file is missing, empty, or fails to parse, `geospatial.py` falls back to a small
 set of hardcoded boundaries (Gulf of Mannar / Palk Bay) and logs a warning — restricted-zone
-checks never go dark just because the cache wasn't refreshed. Real cached polygons are buffered
-outward by ~15km at load time (`MPA_BUFFER_KM` in `geospatial.py`) since WDPA digitizes some
-Indian MPAs as tight island/reef clusters rather than the full park extent, and others as a
-bare representative point with no boundary at all.
+checks never go dark just because the cache wasn't refreshed.
+
+PROHIBITED is decided by the area's real extent: the WDPA polygon itself, or, for a site WDPA
+only records as a point, a circle matching the site's reported area (flagged `approximate`).
+Being within 15km of that extent (`MPA_PROXIMITY_KM` in `geospatial.py`) is a warning only.
+There used to be a 15km buffer baked into the extent, which made every Mumbai query PROHIBITED
+because the city sits 4.5km outside Thane Creek. Route planning adds its own 2km clearance
+(`ROUTE_CLEARANCE_KM` in `navigation_agent.py`), and live PFZ detection never picks a cell
+inside a protected area.
 
 ## Known limitations (accepted, not defects)
 
@@ -190,14 +208,17 @@ backend/
   schemas/contracts.py             # Frozen Pydantic contracts (single source of truth)
   schemas/test_fixtures.py         # 4 golden EvidenceBundles
   schemas/demo_snapshot.py         # live-mode fallback system (Tier 2 demo-reliability snapshots)
-  agents/reasoning/                # Groq-backed: planning, marine_data, weather, risk_assessment,
-                                    # navigation, user_interaction (session memory), language
+  schemas/demo_places.py           # sample PFZ zones per city, used when a demo question names another place
+  agents/reasoning/                # Groq-backed: planning, marine_data, weather, risk_assessment
+                                    # no LLM: navigation (A* routing), user_interaction (session memory)
+                                    # Bhashini: language
   agents/deterministic/
     analytics.py   # SST/chlorophyll thresholds (pandas/numpy) + TraceStep
-    geospatial.py  # haversine, nearest PFZ, real MPA geofence (shapely) + TraceStep
+    geospatial.py  # haversine, nearest PFZ, real MPA geofence (shapely), land mask loader + TraceStep
     reporting.py   # merges all evidence → FinalResponse (graceful fallback) + TraceStep
     visualization.py # pins/overlays, (lat,lon)→GeoJSON (lon,lat) + TraceStep
     data/mpa_boundaries.geojson # cached real WDPA MPA polygons (see below)
+    data/land_india.geojson     # Natural Earth land clipped to Indian seas, used by route planning
   services/                        # alerts, analytics, weather, forecast, export-render — shared
                                     # data-fetch/rendering backbone for the 6 non-chat pages
                                     # pfz_service.py — live SST/chlorophyll front detection + the
@@ -207,6 +228,7 @@ backend/
   models/                          # trained forecast .pkl artifacts (committed, regenerable)
   scripts/
     fetch_mpa_boundaries.py        # one-time/periodic refresh of the MPA cache above
+    build_land_mask.py             # rebuilds data/land_india.geojson from Natural Earth
     train_forecast_models.py       # trains the 7-day wave/wind forecast models
     validate_forecast_models.py    # checks the trained .pkl files load and match the training features
 frontend/
