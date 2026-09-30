@@ -8,7 +8,8 @@ confident answer.
 
 Whatever path produced the verdict (LLM, degraded, or failed), the weather
 hard limits in safety_limits.py are then enforced on it in code: a breached
-limit makes it UNSAFE, never the reverse.
+limit makes it UNSAFE, and a SAFE verdict without both a wave and a wind
+reading becomes inconclusive. Never the reverse.
 """
 
 import json
@@ -16,7 +17,9 @@ import json
 from backend.agents.deterministic.safety_limits import (
     WAVE_HEIGHT_LIMIT_M,
     WIND_LIMIT_KMH,
+    cap_unsupported_safe,
     enforce_hard_limits,
+    missing_safety_readings,
     weather_limit_breaches,
 )
 from backend.agents.reasoning._groq_client import call_groq_json
@@ -137,4 +140,5 @@ async def run_risk_assessment_agent(
         output_summary = f"error: {exc}"
 
     record_trace(trace, "risk_assessment_agent", input_summary, output_summary)
-    return enforce_hard_limits(result, weather_limit_breaches(weather), trace)
+    result = enforce_hard_limits(result, weather_limit_breaches(weather), trace)
+    return cap_unsupported_safe(result, missing_safety_readings(weather), trace)

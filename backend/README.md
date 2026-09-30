@@ -189,7 +189,9 @@ inside a protected area.
 
 - **Chat's PFZ zones are the cached nearest-anchor region's result, not a fresh computation at the exact query point** — see "Chat's own lookup" in "PFZ zone detection" above. `distance_km` is always recomputed from the real query point, but the zone locations themselves are that anchor's cached result; the `is_distant` flag (75km threshold) is what keeps the response honest when the nearest anchor is genuinely far. INCOIS's own advisory zones remain unavailable as an API either way, so no path reproduces INCOIS's exact published zones.
 - **Tide and UV index are not modeled** — dropped from scope; `weather_service.py`/`analytics_service.py` do not surface them.
-- **7-day wave/wind forecast models** (`backend/models/forecast_day1-7.pkl`) are trained artifacts, committed to the repo — regenerate with `python -m backend.scripts.train_forecast_models` if you need to retrain them. They're trained on 9 of the 11 anchor cities: the Goa and Kolkata city points are inland and the Open-Meteo marine archive has no data there (PFZ detection still covers all 11, since it scans a grid box around each city). Usable training data starts on 2022-11-23, because daily SST is missing before that. Wind beats both baselines (persistence and climatology) at every horizon; wave height ties persistence at day 1 and loses slightly to climatology from day 5 on. Full table in the root [README](../README.md#forecast-models).
+- **Marine readings come from the nearest sea grid cell, not the exact place.** Most `_KNOWN_LOCATIONS` entries in `planning_agent.py` are city centres, often on land, so Open-Meteo's marine model answers with its nearest sea cell. Nellore and Kolkata get no marine data at all (both inland, no cell nearby): chat there has no wave reading, so its verdict is at most "inconclusive" (see `safety_limits.cap_unsupported_safe`).
+- **"Safe" needs both a wave and a wind reading.** `safety_limits.py` caps a SAFE verdict at inconclusive when either is missing, after the hard limits run (a breach still makes it UNSAFE). When a Groq call fails and live data already decides the verdict this way, `/query/full` answers from the live data instead of serving a `demo_snapshot.py` snapshot.
+- **7-day wave/wind forecast models** (`backend/models/forecast_day1-7.pkl`) are trained artifacts, committed to the repo — regenerate with `python -m backend.scripts.train_forecast_models` if you need to retrain them. The committed models were trained on 9 of the 11 anchor cities: Goa's stored point was inland at the time (it has since been corrected to Panaji, so the next retrain will include Goa), and Kolkata's is inland, and the Open-Meteo marine archive has no data at either (PFZ detection still covers all 11, since it scans a grid box around each city). Usable training data starts on 2022-11-23, because daily SST is missing before that. Wind beats both baselines (persistence and climatology) at every horizon; wave height ties persistence at day 1 and loses slightly to climatology from day 5 on. Full table in the root [README](../README.md#forecast-models).
 
 ## Project Structure
 
@@ -214,8 +216,9 @@ backend/
                                     # Bhashini: language
   agents/deterministic/
     safety_limits.py # hard go/no-go limits (wave > 3 m, wind > 45 km/h, cyclone/lightning alert,
-                     # inside a protected area) enforced on the risk agent's LLM verdict; can only make
-                     # it stricter, and adds a "safety_rules" TraceStep when a limit is breached
+                     # inside a protected area) enforced on the risk agent's LLM verdict, plus the cap
+                     # that "safe" needs both a wave and a wind reading; can only make a verdict
+                     # stricter, and adds a "safety_rules" TraceStep whenever a rule applies
     analytics.py   # SST/chlorophyll thresholds (pandas/numpy) + TraceStep
     geospatial.py  # haversine, nearest PFZ, real MPA geofence (shapely), land mask loader + TraceStep
     reporting.py   # merges all evidence → FinalResponse (graceful fallback) + TraceStep

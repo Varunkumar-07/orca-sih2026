@@ -121,10 +121,11 @@ def _format_risk(bundle: EvidenceBundle) -> str:
     if bundle.risk is None:
         return "Safety assessment not available."
     r = bundle.risk
-    # A rule-based verdict (a hard limit decided it — see safety_limits.py)
-    # has no probability behind it, so it says so instead of showing a %.
+    # A rule-based verdict (see safety_limits.py) has no probability behind
+    # it, so it says which rule decided instead of showing a %: a breached
+    # limit (UNSAFE) or a missing wave/wind reading (inconclusive).
     if r.verdict_source == "rules":
-        qualifier = "limit breached"
+        qualifier = "limit breached" if r.safe_to_go is False else "missing readings"
     elif r.confidence is None:
         qualifier = None
     else:

@@ -29,7 +29,7 @@ Features:
 
 The Chat page has a Demo/Live toggle. Demo gives sample answers and works offline; Live uses real data and the LLM. It starts on Demo and remembers your last choice. A demo question that names another place moves the sample scenario there.
 
-All API keys are optional. If one is missing or a feed fails, the answer says what's missing instead of crashing. `POST /query/demo` runs fully offline. If a live Groq call fails (rate limit, timeout, API error), `/query/full` serves the closest cached answer from `backend/schemas/demo_snapshot.py` and marks it in the trace.
+All API keys are optional. If one is missing or a feed fails, the answer says what's missing instead of crashing. `POST /query/demo` runs fully offline. If a live Groq call fails (rate limit, timeout, API error), `/query/full` serves the closest cached answer from `backend/schemas/demo_snapshot.py` and marks it in the trace. The exception is when live data already decides the verdict by rule (a safety limit is breached, or a wave or wind reading is missing; see Architecture): then it answers from the live data instead.
 
 The frontend has 9 pages: Home, Chat + Map, Zones Explorer, Weather, Route Planner, Alerts, Analytics, Download and History.
 
@@ -59,6 +59,7 @@ flowchart LR
             PLAN --> MARINE & WEATHER
             MARINE & WEATHER --> RISK
             RISK --> SAFE --> DET --> REP --> LANG2
+            DET -.->|"PROHIBITED<br/>(after geofence)"| SAFE
             PLAN <--> UIA
         end
 
@@ -98,11 +99,16 @@ flowchart LR
     CHAT -. "Groq failure" .-> SNAP
 ```
 
-The Marine and Weather agents run at the same time; Risk waits for both.
+The Marine and Weather agents run at the same time; Risk waits for both. The weather limits are checked right after Risk; the PROHIBITED check runs once the geofence has.
 
 The LLM (Groq, `openai/gpt-oss-20b`) handles only judgment calls: intent, location and the first risk verdict. Geofencing, PFZ scoring, A* routing and the forecast models are deterministic code.
 
-Hard safety limits are also enforced in code, after the LLM gives its verdict (`backend/agents/deterministic/safety_limits.py`): wave height above 3 m, wind above 45 km/h, an active cyclone or lightning alert, or a location inside a protected area (PROHIBITED). If any of these is breached, the answer is "not safe" whatever the LLM said. The rules can only make a verdict stricter, never turn it into "safe". When the rules decide, the answer says "limit breached" instead of a confidence percentage, and a `safety_rules` step in the trace shows the LLM's original verdict and which limit was breached. The 3 m and 45 km/h values are the thresholds the LLM prompt used before they were moved into code.
+Hard safety limits are also enforced in code, after the LLM gives its verdict (`backend/agents/deterministic/safety_limits.py`): wave height above 3 m, wind above 45 km/h, an active cyclone or lightning alert, or a location inside a protected area (PROHIBITED). If any of these is breached, the answer is "not safe" whatever the LLM said. "Safe" also needs both a wave and a wind reading: if either is missing, the answer is at most "inconclusive". The rules can only make a verdict stricter, never turn it into "safe". When the rules decide, the answer says "limit breached" or "missing readings" instead of a confidence percentage, and a `safety_rules` step in the trace shows the LLM's original verdict and which rule applied. The 3 m and 45 km/h values are the thresholds the LLM prompt used before they were moved into code.
+
+## Known limitations
+
+- Answers are for the nearest point with marine data, not always the exact place. Most places ORCA knows by name are stored as city centres, often on land, so wave height and SST come from the nearest sea grid cell of the Open-Meteo marine model.
+- Two named places get no marine data at all: Nellore and Kolkata are inland, and the marine model has no nearby cell. Chat answers for those two can't be "safe"; they're "inconclusive" at best, because there's no wave reading. PFZ zones near Kolkata still come from satellite data around the Hooghly mouth.
 
 ## Tech stack
 
@@ -241,7 +247,7 @@ npm run build
 
 `GET /weather/forecast` uses 7 RandomForest models in `backend/models/`, one per day ahead (`forecast_day1.pkl` to `forecast_day7.pkl`). Each one predicts both wave height (m) and max wind speed (km/h).
 
-- Data: daily Open-Meteo marine and weather archives, requested from 2021-11-01 to two days before the training run. The training script asks for the same 11 cities used for PFZ detection, but only 9 have data: the Goa and Kolkata city points are inland and the marine archive returns nothing there. PFZ detection is not affected, since it scans a grid box around each city rather than the city point itself.
+- Data: daily Open-Meteo marine and weather archives, requested from 2021-11-01 to two days before the training run. The training script asks for the same 11 cities used for PFZ detection, but the models in the repo were trained on 9: at the time, Goa's stored point was inland (it now points at Panaji, so the next retrain will include Goa), and Kolkata's is inland, and the marine archive returns nothing at either. PFZ detection is not affected, since it scans a grid box around each city rather than the city point itself.
 - Daily SST is missing for about 400 days before early 2025, and rows with a missing feature are dropped, so the usable training data starts on 2022-11-23.
 - Features: lat, lon, month (sin/cos), wave height and its previous-day value, wind speed and its previous-day value, SST, air temperature.
 - Each horizon is predicted directly from real day-0 values. Predictions are never fed back in as inputs. The target and the previous-day values are joined by calendar date, so a missing day is dropped rather than filled from a neighbouring row.

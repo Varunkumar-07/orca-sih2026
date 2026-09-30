@@ -69,8 +69,11 @@ _KNOWN_LOCATIONS: dict[str, GeoPoint] = {
     "vasai": GeoPoint(lat=19.4700, lon=72.8000),
     "malvan": GeoPoint(lat=16.0667, lon=73.4667),
     "devgad": GeoPoint(lat=16.3789, lon=73.3872),
-    "goa": GeoPoint(lat=15.2993, lon=74.1240),
-    "panaji": GeoPoint(lat=15.2993, lon=74.1240),
+    # Panaji itself (OpenStreetMap). The old point (15.2993, 74.1240) was
+    # inland, about 30km from the coast, and got no Open-Meteo marine data.
+    # "goa" is also a PFZ anchor, so this moved its search box too.
+    "goa": GeoPoint(lat=15.4990, lon=73.8282),
+    "panaji": GeoPoint(lat=15.4990, lon=73.8282),
     "margao": GeoPoint(lat=15.2832, lon=73.9862),
     "vasco da gama": GeoPoint(lat=15.3980, lon=73.8121),
     "mormugao": GeoPoint(lat=15.4033, lon=73.8064),
@@ -144,7 +147,9 @@ _KNOWN_LOCATIONS: dict[str, GeoPoint] = {
     "kolkata": GeoPoint(lat=22.5726, lon=88.3639),
     "digha": GeoPoint(lat=21.6274, lon=87.5085),
     "haldia": GeoPoint(lat=22.0667, lon=88.0698),
-    "diamond harbour": GeoPoint(lat=22.1833, lon=88.1833),
+    # ~5km down the Hooghly from the town, the nearest point the Open-Meteo
+    # marine API returns wave data for (the town point itself gets none).
+    "diamond harbour": GeoPoint(lat=22.1384, lon=88.1867),
     "sagar island": GeoPoint(lat=21.6500, lon=88.0500),
     "kakdwip": GeoPoint(lat=21.8833, lon=88.1833),
     # Islands

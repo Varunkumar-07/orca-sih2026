@@ -32,6 +32,7 @@ from backend.agents.deterministic.geospatial import (
 from backend.agents.deterministic.reporting import run_reporting
 from backend.agents.deterministic.safety_limits import (
     enforce_hard_limits,
+    missing_safety_readings,
     prohibited_area_breaches,
     weather_limit_breaches,
 )
@@ -478,16 +479,19 @@ async def query_full(request: QueryRequest, response: Response) -> FinalResponse
         return await _apply_output_language(final, effective_language)
 
     api_failed = api_failure_detected or _bundle_has_api_failure(bundle)
-    live_breaches = weather_limit_breaches(bundle.weather) if api_failed else []
-    if live_breaches:
-        # Live weather already breaches a hard limit, so the risk agent's
-        # verdict is UNSAFE by rule (see safety_limits.py) even though its
-        # LLM call failed. A cached snapshot could say "safe" for some other
-        # place and time — never serve one over a live hazard; answer from
-        # the live evidence below instead.
+    # A cached snapshot could say "safe" for some other place and time, so
+    # it's only served when live data could itself have supported a verdict.
+    # When live weather breaches a hard limit (UNSAFE by rule) or lacks a
+    # wave or wind reading (at most inconclusive by rule), the risk agent
+    # has already set a rule-based verdict with no raw error text — see
+    # safety_limits.py — so answer from the live evidence below instead.
+    live_reasons = (
+        weather_limit_breaches(bundle.weather) + missing_safety_readings(bundle.weather) if api_failed else []
+    )
+    if live_reasons:
         logger.warning(
-            "[DEMO FALLBACK] skipped for query=%r — live weather breaches hard limits: %s",
-            english_query[:200], "; ".join(live_breaches),
+            "[DEMO FALLBACK] skipped for query=%r — live data decides by rule: %s",
+            english_query[:200], "; ".join(live_reasons),
         )
     elif api_failed:
         # run_planning_agent already flags this explicitly (it's the only

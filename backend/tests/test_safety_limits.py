@@ -337,3 +337,129 @@ def test_groq_failure_without_a_hazard_still_serves_the_snapshot(monkeypatch):
     resp = TestClient(app).post("/query/full", json={"query": "is it safe near chennai"})
     assert resp.status_code == 200
     assert "demo_fallback" in [t["agent_name"] for t in resp.json()["reasoning_trace"]]
+
+
+# ---------------------------------------------------------------------------
+# "Safe" needs both a wave and a wind reading (cap_unsupported_safe)
+# ---------------------------------------------------------------------------
+
+
+def test_missing_readings_lists_each_missing_one():
+    assert sl.missing_safety_readings(_weather()) == []
+    assert sl.missing_safety_readings(_weather(wave_height_m=None)) == ["wave height reading unavailable"]
+    assert sl.missing_safety_readings(_weather(wind_kmh=None)) == ["wind reading unavailable"]
+    assert len(sl.missing_safety_readings(_weather(wave_height_m=None, wind_kmh=None))) == 2
+
+
+def test_no_weather_or_failed_weather_counts_as_both_missing():
+    assert len(sl.missing_safety_readings(None)) == 2
+    assert len(sl.missing_safety_readings(_weather(status="error", wind_kmh=15.0, wave_height_m=0.8))) == 2
+
+
+@pytest.mark.parametrize("overrides", [{"wave_height_m": None}, {"wind_kmh": None}])
+def test_a_safe_verdict_missing_a_reading_is_capped_at_inconclusive(overrides):
+    trace = []
+    missing = sl.missing_safety_readings(_weather(**overrides))
+    result = sl.cap_unsupported_safe(_risk(True, 0.9), missing, trace)
+    assert result.safe_to_go is None
+    assert result.verdict_source == "rules"
+    assert result.confidence is None
+    assert result.status == "partial"
+    assert "Not enough data to call it safe" in result.explanation
+    assert len(trace) == 1 and "CAPPED" in trace[0].output_summary
+    assert "safe_to_go=True, confidence=0.9" in trace[0].input_summary
+
+
+def test_both_missing_readings_are_listed_in_the_explanation():
+    result = sl.cap_unsupported_safe(_risk(True), sl.missing_safety_readings(None), [])
+    assert "wave height reading unavailable" in result.explanation
+    assert "wind reading unavailable" in result.explanation
+
+
+def test_an_unsafe_verdict_with_a_missing_reading_is_untouched():
+    risk = _risk(False, 0.7)
+    trace = []
+    assert sl.cap_unsupported_safe(risk, ["wave height reading unavailable"], trace) is risk
+    assert trace == []
+
+
+def test_an_inconclusive_verdict_with_a_missing_reading_is_untouched():
+    risk = _risk(None, 0.4, status="partial")
+    assert sl.cap_unsupported_safe(risk, ["wind reading unavailable"], []) is risk
+
+
+def test_complete_readings_leave_a_safe_verdict_unchanged():
+    risk = _risk(True, 0.9)
+    trace = []
+    assert sl.cap_unsupported_safe(risk, [], trace) is risk
+    assert trace == []
+
+
+def test_failed_assessment_with_a_missing_reading_becomes_rule_based_and_drops_the_raw_error():
+    risk = _risk(None, 0.0, status="error", error_message="Error code: 429 - rate limited")
+    trace = []
+    result = sl.cap_unsupported_safe(risk, ["wave height reading unavailable"], trace)
+    assert result.safe_to_go is None
+    assert result.status == "partial"
+    assert result.verdict_source == "rules"
+    assert result.error_message is None
+    assert "Error code: 429" in trace[0].input_summary
+
+
+def test_risk_agent_caps_llm_safe_verdict_when_wave_reading_is_missing(monkeypatch):
+    monkeypatch.setattr(
+        raa, "call_groq_json", _async_return({"safe_to_go": True, "confidence": 0.85, "explanation": "Calm."})
+    )
+    trace = []
+    weather = _weather(status="partial", wave_height_m=None)
+    result = asyncio.run(raa.run_risk_assessment_agent(_bundle(_marine(), weather), trace))
+    assert result.safe_to_go is None
+    assert result.verdict_source == "rules"
+    assert [t.agent_name for t in trace] == ["risk_assessment_agent", "safety_rules"]
+
+
+def test_breach_wins_over_the_cap_when_a_reading_is_also_missing(monkeypatch):
+    """A cyclone alert with no wave reading is UNSAFE, not inconclusive."""
+    monkeypatch.setattr(
+        raa, "call_groq_json", _async_return({"safe_to_go": True, "confidence": 0.8, "explanation": "Looks fine."})
+    )
+    weather = _weather(status="partial", wave_height_m=None, cyclone_alert=True)
+    result = asyncio.run(raa.run_risk_assessment_agent(_bundle(_marine(), weather), []))
+    assert result.safe_to_go is False
+    assert result.verdict_source == "rules"
+
+
+def test_reporting_labels_a_rule_based_inconclusive_verdict_as_missing_readings():
+    bundle = FIXTURE_1_HAPPY_PATH.model_copy(deep=True)
+    bundle.risk = RiskAssessment(
+        status="partial",
+        safe_to_go=None,
+        confidence=None,
+        explanation="Not enough data to call it safe: wave height reading unavailable.",
+        verdict_source="rules",
+    )
+    text = run_reporting(bundle).answer_text
+    assert "❓ Safety assessment inconclusive (missing readings) — Not enough data" in text
+    assert "limit breached" not in text
+
+
+def _groq_failed_bundle(weather: WeatherDataResult) -> EvidenceBundle:
+    trace = []
+    risk = _risk(None, 0.0, status="error", error_message="Error code: 429 - rate limited")
+    risk = sl.enforce_hard_limits(risk, sl.weather_limit_breaches(weather), trace)
+    risk = sl.cap_unsupported_safe(risk, sl.missing_safety_readings(weather), trace)
+    return EvidenceBundle(
+        query_text="is it safe near kolkata", query_location=_LOCATION, marine=_marine(), weather=weather, risk=risk, trace=trace
+    )
+
+
+def test_groq_failure_with_a_missing_reading_never_serves_a_snapshot(monkeypatch):
+    _patch_planning(monkeypatch, _groq_failed_bundle(_weather(status="partial", wave_height_m=None)), api_failure=True)
+    resp = TestClient(app).post("/query/full", json={"query": "is it safe near kolkata"})
+    assert resp.status_code == 200
+    body = resp.json()
+    agents = [t["agent_name"] for t in body["reasoning_trace"]]
+    assert "demo_fallback" not in agents
+    assert "safety_rules" in agents
+    assert "Safety assessment inconclusive (missing readings)" in body["answer_text"]
+    assert "Error code" not in body["answer_text"]
