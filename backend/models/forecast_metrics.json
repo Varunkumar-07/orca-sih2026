@@ -1,86 +1,653 @@
 {
+  "_meta": {
+    "trained_at": "2026-09-30T13:42:52Z",
+    "data_window": {
+      "requested_start": "2021-11-01",
+      "requested_end": "2026-09-28",
+      "first_date": "2021-11-01",
+      "last_date": "2026-09-28"
+    },
+    "anchors": {
+      "kandla": {
+        "lat": 23.0333,
+        "lon": 70.2167,
+        "usable_days": 1793
+      },
+      "mumbai": {
+        "lat": 19.076,
+        "lon": 72.8777,
+        "usable_days": 1793
+      },
+      "goa": {
+        "lat": 15.2993,
+        "lon": 74.124,
+        "usable_days": 0
+      },
+      "mangaluru": {
+        "lat": 12.9141,
+        "lon": 74.856,
+        "usable_days": 1793
+      },
+      "kochi": {
+        "lat": 9.9312,
+        "lon": 76.2673,
+        "usable_days": 1793
+      },
+      "chennai": {
+        "lat": 13.0827,
+        "lon": 80.2707,
+        "usable_days": 1793
+      },
+      "gulf of mannar": {
+        "lat": 9.15,
+        "lon": 79.15,
+        "usable_days": 1793
+      },
+      "visakhapatnam": {
+        "lat": 17.6868,
+        "lon": 83.2185,
+        "usable_days": 1793
+      },
+      "paradip": {
+        "lat": 20.3167,
+        "lon": 86.6167,
+        "usable_days": 1793
+      },
+      "kolkata": {
+        "lat": 22.5726,
+        "lon": 88.3639,
+        "usable_days": 0
+      },
+      "port blair": {
+        "lat": 11.6234,
+        "lon": 92.7265,
+        "usable_days": 1793
+      }
+    },
+    "anchors_used": 9,
+    "total_usable_days": 16137,
+    "split": {
+      "method": "one calendar-date cutoff for all anchors; a training row's own date and target date are both before the cutoff, a test row's date is on or after it",
+      "train_fraction_of_dates": 0.8,
+      "validation": "last 15% of the training period's dates, used only to choose the target encoding"
+    },
+    "model": {
+      "type": "RandomForestRegressor (multi-output)",
+      "n_estimators": 100,
+      "max_depth": 12,
+      "min_samples_leaf": 5,
+      "random_state": 42
+    },
+    "features": [
+      "lat",
+      "lon",
+      "month_sin",
+      "month_cos",
+      "wave_height_m",
+      "wave_height_lag1",
+      "wind_kmh",
+      "wind_kmh_lag1",
+      "sst_celsius",
+      "air_temp_celsius"
+    ],
+    "targets": [
+      "wave_height_m",
+      "wind_kmh"
+    ],
+    "baselines": {
+      "persistence": "day+h = day 0's own value",
+      "climatology": "per-anchor, per-target-month mean from training rows only (anchor mean if the month is missing)"
+    },
+    "skill_score": "1 - model MAE / baseline MAE (above 0: model beats the baseline)",
+    "sklearn_version": "1.9.1",
+    "data_source": "Open-Meteo marine archive + weather archive (daily)",
+    "target_transform": {
+      "chosen": "standardized",
+      "candidates": [
+        "standardized",
+        "residual"
+      ],
+      "reference_only": [
+        "raw"
+      ],
+      "validation_scores": {
+        "raw": 0.9017,
+        "standardized": 0.8655,
+        "residual": 0.8699
+      },
+      "criterion": "mean over horizons and targets of validation MAE / validation persistence MAE; lowest wins"
+    }
+  },
   "day1": {
     "wave_height_m": {
-      "MAE": 0.152,
-      "RMSE": 0.21
+      "MAE": 0.12,
+      "RMSE": 0.176
     },
     "wind_kmh": {
-      "MAE": 2.38,
-      "RMSE": 3.14
+      "MAE": 2.47,
+      "RMSE": 3.27
     },
-    "train_rows": 9900,
-    "test_rows": 2475
+    "train_rows": 10008,
+    "test_rows": 2511,
+    "train_dates": [
+      "2022-11-23",
+      "2025-12-21"
+    ],
+    "test_dates": [
+      "2025-12-23",
+      "2026-09-27"
+    ],
+    "baselines": {
+      "persistence": {
+        "wave_height_m": {
+          "MAE": 0.12,
+          "RMSE": 0.178
+        },
+        "wind_kmh": {
+          "MAE": 2.61,
+          "RMSE": 3.52
+        }
+      },
+      "climatology": {
+        "wave_height_m": {
+          "MAE": 0.202,
+          "RMSE": 0.295
+        },
+        "wind_kmh": {
+          "MAE": 3.49,
+          "RMSE": 4.51
+        }
+      }
+    },
+    "skill": {
+      "vs_persistence": {
+        "wave_height_m": 0.003,
+        "wind_kmh": 0.053
+      },
+      "vs_climatology": {
+        "wave_height_m": 0.408,
+        "wind_kmh": 0.291
+      }
+    },
+    "split": {
+      "test_cutoff": "2025-12-23",
+      "validation_cutoff": "2025-07-08",
+      "fit_rows": 8496,
+      "validation_rows": 1503
+    },
+    "validation_mae": {
+      "raw": {
+        "wave_height_m": 0.1762,
+        "wind_kmh": 2.83
+      },
+      "standardized": {
+        "wave_height_m": 0.1336,
+        "wind_kmh": 2.846
+      },
+      "residual": {
+        "wave_height_m": 0.1311,
+        "wind_kmh": 2.7702
+      },
+      "persistence": {
+        "wave_height_m": 0.1383,
+        "wind_kmh": 2.9212
+      }
+    }
   },
   "day2": {
     "wave_height_m": {
-      "MAE": 0.182,
-      "RMSE": 0.247
+      "MAE": 0.167,
+      "RMSE": 0.239
     },
     "wind_kmh": {
-      "MAE": 2.84,
-      "RMSE": 3.72
+      "MAE": 2.98,
+      "RMSE": 3.9
     },
-    "train_rows": 9892,
-    "test_rows": 2474
+    "train_rows": 9990,
+    "test_rows": 2511,
+    "train_dates": [
+      "2022-11-23",
+      "2025-12-19"
+    ],
+    "test_dates": [
+      "2025-12-22",
+      "2026-09-26"
+    ],
+    "baselines": {
+      "persistence": {
+        "wave_height_m": {
+          "MAE": 0.177,
+          "RMSE": 0.262
+        },
+        "wind_kmh": {
+          "MAE": 3.32,
+          "RMSE": 4.49
+        }
+      },
+      "climatology": {
+        "wave_height_m": {
+          "MAE": 0.202,
+          "RMSE": 0.295
+        },
+        "wind_kmh": {
+          "MAE": 3.49,
+          "RMSE": 4.51
+        }
+      }
+    },
+    "skill": {
+      "vs_persistence": {
+        "wave_height_m": 0.061,
+        "wind_kmh": 0.102
+      },
+      "vs_climatology": {
+        "wave_height_m": 0.176,
+        "wind_kmh": 0.146
+      }
+    },
+    "split": {
+      "test_cutoff": "2025-12-22",
+      "validation_cutoff": "2025-07-06",
+      "fit_rows": 8469,
+      "validation_rows": 1503
+    },
+    "validation_mae": {
+      "raw": {
+        "wave_height_m": 0.2221,
+        "wind_kmh": 3.6386
+      },
+      "standardized": {
+        "wave_height_m": 0.1988,
+        "wind_kmh": 3.6223
+      },
+      "residual": {
+        "wave_height_m": 0.1997,
+        "wind_kmh": 3.5315
+      },
+      "persistence": {
+        "wave_height_m": 0.2193,
+        "wind_kmh": 3.8609
+      }
+    }
   },
   "day3": {
     "wave_height_m": {
-      "MAE": 0.198,
-      "RMSE": 0.268
+      "MAE": 0.187,
+      "RMSE": 0.269
     },
     "wind_kmh": {
-      "MAE": 3.04,
-      "RMSE": 3.98
+      "MAE": 3.19,
+      "RMSE": 4.21
     },
-    "train_rows": 9885,
-    "test_rows": 2472
+    "train_rows": 9981,
+    "test_rows": 2502,
+    "train_dates": [
+      "2022-11-23",
+      "2025-12-18"
+    ],
+    "test_dates": [
+      "2025-12-22",
+      "2026-09-25"
+    ],
+    "baselines": {
+      "persistence": {
+        "wave_height_m": {
+          "MAE": 0.213,
+          "RMSE": 0.317
+        },
+        "wind_kmh": {
+          "MAE": 3.74,
+          "RMSE": 5.08
+        }
+      },
+      "climatology": {
+        "wave_height_m": {
+          "MAE": 0.202,
+          "RMSE": 0.295
+        },
+        "wind_kmh": {
+          "MAE": 3.49,
+          "RMSE": 4.52
+        }
+      }
+    },
+    "skill": {
+      "vs_persistence": {
+        "wave_height_m": 0.12,
+        "wind_kmh": 0.147
+      },
+      "vs_climatology": {
+        "wave_height_m": 0.075,
+        "wind_kmh": 0.086
+      }
+    },
+    "split": {
+      "test_cutoff": "2025-12-22",
+      "validation_cutoff": "2025-07-05",
+      "fit_rows": 8451,
+      "validation_rows": 1503
+    },
+    "validation_mae": {
+      "raw": {
+        "wave_height_m": 0.245,
+        "wind_kmh": 3.8418
+      },
+      "standardized": {
+        "wave_height_m": 0.2324,
+        "wind_kmh": 3.8797
+      },
+      "residual": {
+        "wave_height_m": 0.2351,
+        "wind_kmh": 3.862
+      },
+      "persistence": {
+        "wave_height_m": 0.2681,
+        "wind_kmh": 4.4479
+      }
+    }
   },
   "day4": {
     "wave_height_m": {
-      "MAE": 0.208,
-      "RMSE": 0.28
+      "MAE": 0.196,
+      "RMSE": 0.286
     },
     "wind_kmh": {
-      "MAE": 3.11,
-      "RMSE": 4.07
+      "MAE": 3.23,
+      "RMSE": 4.31
     },
-    "train_rows": 9878,
-    "test_rows": 2470
+    "train_rows": 9963,
+    "test_rows": 2502,
+    "train_dates": [
+      "2022-11-23",
+      "2025-12-16"
+    ],
+    "test_dates": [
+      "2025-12-21",
+      "2026-09-24"
+    ],
+    "baselines": {
+      "persistence": {
+        "wave_height_m": {
+          "MAE": 0.23,
+          "RMSE": 0.346
+        },
+        "wind_kmh": {
+          "MAE": 3.93,
+          "RMSE": 5.34
+        }
+      },
+      "climatology": {
+        "wave_height_m": {
+          "MAE": 0.202,
+          "RMSE": 0.295
+        },
+        "wind_kmh": {
+          "MAE": 3.49,
+          "RMSE": 4.52
+        }
+      }
+    },
+    "skill": {
+      "vs_persistence": {
+        "wave_height_m": 0.145,
+        "wind_kmh": 0.177
+      },
+      "vs_climatology": {
+        "wave_height_m": 0.029,
+        "wind_kmh": 0.074
+      }
+    },
+    "split": {
+      "test_cutoff": "2025-12-21",
+      "validation_cutoff": "2025-07-03",
+      "fit_rows": 8424,
+      "validation_rows": 1503
+    },
+    "validation_mae": {
+      "raw": {
+        "wave_height_m": 0.2554,
+        "wind_kmh": 3.963
+      },
+      "standardized": {
+        "wave_height_m": 0.2514,
+        "wind_kmh": 4.0268
+      },
+      "residual": {
+        "wave_height_m": 0.2555,
+        "wind_kmh": 4.0109
+      },
+      "persistence": {
+        "wave_height_m": 0.2977,
+        "wind_kmh": 4.72
+      }
+    }
   },
   "day5": {
     "wave_height_m": {
-      "MAE": 0.215,
-      "RMSE": 0.288
-    },
-    "wind_kmh": {
-      "MAE": 3.18,
-      "RMSE": 4.17
-    },
-    "train_rows": 9871,
-    "test_rows": 2468
-  },
-  "day6": {
-    "wave_height_m": {
-      "MAE": 0.219,
+      "MAE": 0.203,
       "RMSE": 0.294
     },
     "wind_kmh": {
-      "MAE": 3.26,
-      "RMSE": 4.26
+      "MAE": 3.29,
+      "RMSE": 4.38
     },
-    "train_rows": 9864,
-    "test_rows": 2466
+    "train_rows": 9945,
+    "test_rows": 2502,
+    "train_dates": [
+      "2022-11-23",
+      "2025-12-14"
+    ],
+    "test_dates": [
+      "2025-12-20",
+      "2026-09-23"
+    ],
+    "baselines": {
+      "persistence": {
+        "wave_height_m": {
+          "MAE": 0.243,
+          "RMSE": 0.364
+        },
+        "wind_kmh": {
+          "MAE": 4.02,
+          "RMSE": 5.53
+        }
+      },
+      "climatology": {
+        "wave_height_m": {
+          "MAE": 0.202,
+          "RMSE": 0.295
+        },
+        "wind_kmh": {
+          "MAE": 3.49,
+          "RMSE": 4.52
+        }
+      }
+    },
+    "skill": {
+      "vs_persistence": {
+        "wave_height_m": 0.167,
+        "wind_kmh": 0.182
+      },
+      "vs_climatology": {
+        "wave_height_m": -0.002,
+        "wind_kmh": 0.058
+      }
+    },
+    "split": {
+      "test_cutoff": "2025-12-20",
+      "validation_cutoff": "2025-07-02",
+      "fit_rows": 8406,
+      "validation_rows": 1494
+    },
+    "validation_mae": {
+      "raw": {
+        "wave_height_m": 0.2656,
+        "wind_kmh": 4.0473
+      },
+      "standardized": {
+        "wave_height_m": 0.2583,
+        "wind_kmh": 4.0845
+      },
+      "residual": {
+        "wave_height_m": 0.2711,
+        "wind_kmh": 4.0966
+      },
+      "persistence": {
+        "wave_height_m": 0.3185,
+        "wind_kmh": 4.8533
+      }
+    }
+  },
+  "day6": {
+    "wave_height_m": {
+      "MAE": 0.209,
+      "RMSE": 0.303
+    },
+    "wind_kmh": {
+      "MAE": 3.36,
+      "RMSE": 4.46
+    },
+    "train_rows": 9927,
+    "test_rows": 2502,
+    "train_dates": [
+      "2022-11-23",
+      "2025-12-12"
+    ],
+    "test_dates": [
+      "2025-12-19",
+      "2026-09-22"
+    ],
+    "baselines": {
+      "persistence": {
+        "wave_height_m": {
+          "MAE": 0.254,
+          "RMSE": 0.377
+        },
+        "wind_kmh": {
+          "MAE": 4.17,
+          "RMSE": 5.72
+        }
+      },
+      "climatology": {
+        "wave_height_m": {
+          "MAE": 0.202,
+          "RMSE": 0.295
+        },
+        "wind_kmh": {
+          "MAE": 3.49,
+          "RMSE": 4.51
+        }
+      }
+    },
+    "skill": {
+      "vs_persistence": {
+        "wave_height_m": 0.179,
+        "wind_kmh": 0.194
+      },
+      "vs_climatology": {
+        "wave_height_m": -0.031,
+        "wind_kmh": 0.037
+      }
+    },
+    "split": {
+      "test_cutoff": "2025-12-19",
+      "validation_cutoff": "2025-06-30",
+      "fit_rows": 8379,
+      "validation_rows": 1494
+    },
+    "validation_mae": {
+      "raw": {
+        "wave_height_m": 0.2783,
+        "wind_kmh": 4.1269
+      },
+      "standardized": {
+        "wave_height_m": 0.267,
+        "wind_kmh": 4.1369
+      },
+      "residual": {
+        "wave_height_m": 0.2807,
+        "wind_kmh": 4.1201
+      },
+      "persistence": {
+        "wave_height_m": 0.3354,
+        "wind_kmh": 4.9867
+      }
+    }
   },
   "day7": {
     "wave_height_m": {
-      "MAE": 0.219,
-      "RMSE": 0.296
+      "MAE": 0.214,
+      "RMSE": 0.313
     },
     "wind_kmh": {
-      "MAE": 3.27,
-      "RMSE": 4.28
+      "MAE": 3.39,
+      "RMSE": 4.5
     },
-    "train_rows": 9856,
-    "test_rows": 2465
+    "train_rows": 9909,
+    "test_rows": 2502,
+    "train_dates": [
+      "2022-11-23",
+      "2025-12-10"
+    ],
+    "test_dates": [
+      "2025-12-18",
+      "2026-09-21"
+    ],
+    "baselines": {
+      "persistence": {
+        "wave_height_m": {
+          "MAE": 0.26,
+          "RMSE": 0.388
+        },
+        "wind_kmh": {
+          "MAE": 4.24,
+          "RMSE": 5.83
+        }
+      },
+      "climatology": {
+        "wave_height_m": {
+          "MAE": 0.202,
+          "RMSE": 0.295
+        },
+        "wind_kmh": {
+          "MAE": 3.49,
+          "RMSE": 4.51
+        }
+      }
+    },
+    "skill": {
+      "vs_persistence": {
+        "wave_height_m": 0.179,
+        "wind_kmh": 0.199
+      },
+      "vs_climatology": {
+        "wave_height_m": -0.058,
+        "wind_kmh": 0.028
+      }
+    },
+    "split": {
+      "test_cutoff": "2025-12-18",
+      "validation_cutoff": "2025-06-28",
+      "fit_rows": 8352,
+      "validation_rows": 1494
+    },
+    "validation_mae": {
+      "raw": {
+        "wave_height_m": 0.2832,
+        "wind_kmh": 4.2147
+      },
+      "standardized": {
+        "wave_height_m": 0.2766,
+        "wind_kmh": 4.2712
+      },
+      "residual": {
+        "wave_height_m": 0.293,
+        "wind_kmh": 4.1741
+      },
+      "persistence": {
+        "wave_height_m": 0.3525,
+        "wind_kmh": 5.1277
+      }
+    }
   }
 }

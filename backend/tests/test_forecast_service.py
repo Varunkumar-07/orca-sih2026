@@ -142,6 +142,68 @@ def test_successful_forecast_returns_seven_rounded_predictions_with_mae(monkeypa
     assert "based_on_date" in result
 
 
+def test_meta_block_and_baselines_in_metrics_do_not_change_per_day_mae(monkeypatch):
+    """forecast_metrics.json now carries a top-level "_meta" block and
+    per-day "baselines"; the MAE shown next to each prediction must still
+    be the model's own per-day MAE."""
+    _install_sufficient_fetches(monkeypatch)
+    _install_models(monkeypatch)
+    metrics = {
+        "_meta": {"trained_at": "2026-09-30T00:00:00Z"},
+        **{
+            f"day{h}": {
+                "wave_height_m": {"MAE": 0.1 * h},
+                "wind_kmh": {"MAE": 0.5 * h},
+                "baselines": {"persistence": {"wave_height_m": {"MAE": 9.9}, "wind_kmh": {"MAE": 99.0}}},
+            }
+            for h in svc.HORIZONS
+        },
+    }
+    monkeypatch.setattr(svc, "_load_metrics", lambda: metrics)
+
+    result = asyncio.run(svc.get_forecast(_LAT, _LON))
+
+    assert result["status"] == "ok"
+    assert [f["wave_height_mae"] for f in result["forecast"]] == [0.1 * h for h in svc.HORIZONS]
+    assert [f["wind_kmh_mae"] for f in result["forecast"]] == [0.5 * h for h in svc.HORIZONS]
+
+
+def test_predictions_are_decoded_with_the_artifacts_residual_transform(monkeypatch):
+    """A residual model outputs a standardized change from day 0: the
+    served value must be mean + std * output, plus that point's own day-0
+    value (the last of the fetched pair: wave 1.2 m, wind 12.0 km/h)."""
+    _install_sufficient_fetches(monkeypatch)
+    transform = {"kind": "residual", "targets": ["wave_height_m", "wind_kmh"], "mean": [0.1, 1.0], "std": [0.5, 4.0]}
+
+    def fake_load(horizon):
+        return {"model": _FakeModel(wave_pred=1.0, wind_pred=-0.5), "features": _FEATURES, "target_transform": transform}
+
+    monkeypatch.setattr(svc, "_load_horizon_model", fake_load)
+    monkeypatch.setattr(svc, "_load_metrics", lambda: {})
+
+    result = asyncio.run(svc.get_forecast(_LAT, _LON))
+
+    assert result["status"] == "ok"
+    first = result["forecast"][0]
+    assert first["wave_height_m"] == round(1.2 + 0.1 + 0.5 * 1.0, 2)  # 1.8
+    assert first["wind_kmh"] == round(12.0 + 1.0 + 4.0 * -0.5, 1)  # 11.0
+
+
+def test_predictions_are_decoded_with_a_standardized_transform(monkeypatch):
+    _install_sufficient_fetches(monkeypatch)
+    transform = {"kind": "standardized", "targets": ["wave_height_m", "wind_kmh"], "mean": [1.5, 20.0], "std": [0.4, 5.0]}
+
+    def fake_load(horizon):
+        return {"model": _FakeModel(wave_pred=0.5, wind_pred=1.0), "features": _FEATURES, "target_transform": transform}
+
+    monkeypatch.setattr(svc, "_load_horizon_model", fake_load)
+    monkeypatch.setattr(svc, "_load_metrics", lambda: {})
+
+    first = asyncio.run(svc.get_forecast(_LAT, _LON))["forecast"][0]
+    assert first["wave_height_m"] == 1.7  # no day-0 add-back
+    assert first["wind_kmh"] == 25.0
+
+
 def test_forecast_dates_are_sequential_days_after_day0(monkeypatch):
     _install_sufficient_fetches(monkeypatch)
     _install_models(monkeypatch)

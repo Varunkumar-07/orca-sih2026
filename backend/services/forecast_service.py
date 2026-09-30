@@ -36,6 +36,7 @@ import joblib
 import pandas as pd
 
 from backend.services import heavy_work
+from backend.services.forecast_targets import TARGETS, decode
 from backend.services.analytics_service import _fetch_archive_daily, _fetch_marine_daily
 from backend.time_utils import now_iso as _now_iso
 
@@ -104,7 +105,11 @@ def _predict_horizons(row: pd.DataFrame) -> tuple[list[tuple[int, float, float]]
             artifact = _load_horizon_model(horizon)
             if artifact is None:
                 return preds, horizon
-            pred = artifact["model"].predict(row[artifact["features"]])[0]
+            # Models are fit on encoded targets (standardized, or residuals
+            # from day 0 — see forecast_targets.py); decode with the
+            # artifact's own transform, using this row's day-0 values.
+            encoded = artifact["model"].predict(row[artifact["features"]])
+            pred = decode(encoded, row[list(TARGETS)].to_numpy(dtype=float), artifact.get("target_transform"))[0]
             preds.append((horizon, float(pred[0]), float(pred[1])))
             del artifact
         return preds, None

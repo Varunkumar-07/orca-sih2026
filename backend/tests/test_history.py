@@ -233,3 +233,43 @@ def test_history_filter_by_unknown_page_source_returns_empty(client):
     result = _history(client, {"page_source": "not-a-real-page", "limit": 5}).json()
     assert result["items"] == []
     assert result["total"] == 0
+
+
+def test_rule_based_null_confidence_verdict_roundtrips_through_history(client, monkeypatch):
+    """A hard-limit override (safety_limits.py) leaves risk.confidence=None
+    and verdict_source="rules". POST /query returns that RiskAssessment as-is
+    — the history layer must store and serve it back (JSONB null + the new
+    field) without error, since the History page shows the raw payload."""
+    from backend.routers import chat
+    from backend.schemas.contracts import EvidenceBundle, GeoPoint, RiskAssessment
+
+    session_id = "test-session-null-confidence"
+    bundle = EvidenceBundle(
+        query_text="is it safe near chennai",
+        query_location=GeoPoint(lat=13.08, lon=80.27),
+        marine=None,
+        weather=None,
+        risk=RiskAssessment(
+            status="partial",
+            safe_to_go=False,
+            confidence=None,
+            explanation="Hard safety limit breached: active cyclone alert.",
+            verdict_source="rules",
+        ),
+    )
+
+    async def fake_planning(query, session_id_arg=None, user_location=None):
+        return bundle, session_id, None, False, None
+
+    monkeypatch.setattr(chat, "run_planning_agent", fake_planning)
+    resp = client.post("/query", json={"query": "is it safe near chennai", "session_id": session_id})
+    assert resp.status_code == 200
+    assert resp.json()["risk"]["confidence"] is None
+
+    listing = _history(client, {"page_source": "chat", "limit": 50})
+    row = next(item for item in listing.json()["items"] if item["session_id"] == session_id)
+    detail = client.get(f"/history/{row['id']}")
+    assert detail.status_code == 200
+    risk = detail.json()["payload"]["response"]["risk"]
+    assert risk["confidence"] is None
+    assert risk["verdict_source"] == "rules"

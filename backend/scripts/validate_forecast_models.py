@@ -11,13 +11,21 @@ Checks:
     FEATURE_COLS/TARGET_COLS — catches serving-time feature-building
     silently drifting out of lockstep with what a stale model was
     actually trained on
-  - the loaded "model" object is actually usable (has .predict())
+  - the loaded "model" object is actually usable (has .predict()), and the
+    artifact carries a valid "target_transform" (what forecast_service.py
+    decodes predictions with — see backend/services/forecast_targets.py)
   - forecast_metrics.json / forecast_feature_importance.json exist, parse,
     and cover the same 7 horizons with finite, non-negative MAE values
     within a loose sane range (catches a training run that silently
     produced garbage — e.g. an upstream API schema change or a
     degenerate/empty training set) — not an accuracy bar, just a
     "didn't go badly wrong" check
+  - forecast_metrics.json has a "_meta" block (training time, data window,
+    anchors, split, model settings) and, for every horizon, both baselines
+    (persistence, climatology) scored per target — an error if missing
+  - prints a model-vs-baseline MAE table; a horizon/target where the model
+    does worse than a baseline is a WARNING, not a failure (it's reported,
+    so it can't go unnoticed, but it doesn't block the run)
 
 Usage (from the project root):
     python -m backend.scripts.validate_forecast_models
@@ -31,7 +39,8 @@ from pathlib import Path
 
 import joblib
 
-from backend.scripts.train_forecast_models import FEATURE_COLS, HORIZONS, TARGET_COLS
+from backend.scripts.train_forecast_models import BASELINES, FEATURE_COLS, HORIZONS, TARGET_COLS
+from backend.services.forecast_targets import KINDS
 
 MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 
@@ -39,6 +48,7 @@ MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
 # training run that went badly wrong, not to enforce a specific accuracy bar.
 _MAX_SANE_WAVE_MAE_M = 5.0
 _MAX_SANE_WIND_MAE_KMH = 50.0
+_REQUIRED_META_KEYS = ("trained_at", "data_window", "anchors", "split", "model")
 
 
 def _validate_model_file(models_dir: Path, horizon: int) -> list[str]:
@@ -52,8 +62,8 @@ def _validate_model_file(models_dir: Path, horizon: int) -> list[str]:
     except Exception as exc:
         return [f"{path.name} failed to load: {exc}"]
 
-    if not isinstance(payload, dict) or set(payload) != {"model", "features", "targets"}:
-        return [f"{path.name} has unexpected shape (expected keys model/features/targets): {payload!r:.200}"]
+    if not isinstance(payload, dict) or set(payload) != {"model", "features", "targets", "target_transform"}:
+        return [f"{path.name} has unexpected shape (expected keys model/features/targets/target_transform): {payload!r:.200}"]
 
     if payload["features"] != FEATURE_COLS:
         errors.append(f"{path.name}: features {payload['features']} != current FEATURE_COLS {FEATURE_COLS}")
@@ -61,6 +71,13 @@ def _validate_model_file(models_dir: Path, horizon: int) -> list[str]:
         errors.append(f"{path.name}: targets {payload['targets']} != current TARGET_COLS {TARGET_COLS}")
     if not hasattr(payload["model"], "predict"):
         errors.append(f"{path.name}: 'model' object has no predict() method")
+    transform = payload["target_transform"]
+    if not isinstance(transform, dict) or transform.get("kind") not in KINDS:
+        errors.append(f"{path.name}: target_transform {transform!r:.200} is not one of {KINDS}")
+    elif transform["kind"] != "raw" and not (
+        len(transform.get("mean", [])) == len(TARGET_COLS) and len(transform.get("std", [])) == len(TARGET_COLS)
+    ):
+        errors.append(f"{path.name}: target_transform needs a mean and std per target")
 
     return errors
 
@@ -72,6 +89,14 @@ def _validate_metrics(models_dir: Path) -> list[str]:
         metrics = json.loads(metrics_path.read_text())
     except Exception as exc:
         return [f"forecast_metrics.json missing/unreadable: {exc}"]
+
+    meta = metrics.get("_meta")
+    if not isinstance(meta, dict):
+        errors.append("forecast_metrics.json: missing _meta block (training time, data window, split, ...)")
+    else:
+        for field in _REQUIRED_META_KEYS:
+            if field not in meta:
+                errors.append(f"forecast_metrics.json: _meta is missing '{field}'")
 
     for horizon in HORIZONS:
         key = f"day{horizon}"
@@ -88,7 +113,51 @@ def _validate_metrics(models_dir: Path) -> list[str]:
         if not isinstance(wind_mae, (int, float)) or not (0 <= wind_mae <= _MAX_SANE_WIND_MAE_KMH):
             errors.append(f"{key}: wind_kmh MAE {wind_mae!r} out of sane range [0, {_MAX_SANE_WIND_MAE_KMH}]")
 
+        baselines = day_metrics.get("baselines")
+        if not isinstance(baselines, dict):
+            errors.append(f"{key}: missing baselines")
+            continue
+        for name in BASELINES:
+            for target in TARGET_COLS:
+                mae = (baselines.get(name) or {}).get(target, {}).get("MAE")
+                if not isinstance(mae, (int, float)) or mae < 0:
+                    errors.append(f"{key}: {name} baseline MAE for {target} missing or invalid ({mae!r})")
+
     return errors
+
+
+def baseline_comparison(models_dir: Path = MODELS_DIR) -> tuple[list[str], list[str]]:
+    """(table_lines, warnings): model vs baseline MAE per horizon and
+    target, and one warning per case where the model's MAE is worse than a
+    baseline's. Empty when the metrics can't be read or lack baselines —
+    validate_models() reports those as errors."""
+    try:
+        metrics = json.loads((models_dir / "forecast_metrics.json").read_text())
+    except Exception:
+        return [], []
+
+    lines = [f"{'day':<5}{'target':<15}{'model':>9}{'persist':>9}{'clim':>9}{'skill_p':>9}{'skill_c':>9}"]
+    warnings: list[str] = []
+    for horizon in HORIZONS:
+        key = f"day{horizon}"
+        day = metrics.get(key) or {}
+        baselines = day.get("baselines")
+        if not isinstance(baselines, dict):
+            continue
+        for target in TARGET_COLS:
+            model_mae = day.get(target, {}).get("MAE")
+            base = {name: (baselines.get(name) or {}).get(target, {}).get("MAE") for name in BASELINES}
+            if not isinstance(model_mae, (int, float)) or not all(isinstance(v, (int, float)) for v in base.values()):
+                continue
+            skill = {name: (1 - model_mae / v if v > 0 else float("nan")) for name, v in base.items()}
+            lines.append(
+                f"{key:<5}{target:<15}{model_mae:>9.3f}{base['persistence']:>9.3f}{base['climatology']:>9.3f}"
+                f"{skill['persistence']:>9.3f}{skill['climatology']:>9.3f}"
+            )
+            for name, v in base.items():
+                if model_mae > v:
+                    warnings.append(f"{key} {target}: model MAE {model_mae} is worse than {name} baseline MAE {v}")
+    return lines, warnings
 
 
 def _validate_feature_importance(models_dir: Path) -> list[str]:
@@ -115,13 +184,22 @@ def validate_models(models_dir: Path = MODELS_DIR) -> list[str]:
     return errors
 
 
-def main() -> None:
-    errors = validate_models()
+def main(models_dir: Path = MODELS_DIR) -> None:
+    lines, warnings = baseline_comparison(models_dir)
+    if lines:
+        print("MAE — model vs baselines (skill = 1 - model/baseline; above 0 = model better):")
+        for line in lines:
+            print(f"  {line}")
+    for w in warnings:
+        print(f"WARNING: {w}")
+
+    errors = validate_models(models_dir)
     if errors:
         for e in errors:
             print(f"FAIL: {e}", file=sys.stderr)
         sys.exit(1)
-    print(f"OK — all {len(list(HORIZONS))} forecast models + metrics + feature importance validated.")
+    note = f" ({len(warnings)} baseline warning(s) above)" if warnings else ""
+    print(f"OK — all {len(list(HORIZONS))} forecast models + metrics + feature importance validated{note}.")
 
 
 if __name__ == "__main__":
